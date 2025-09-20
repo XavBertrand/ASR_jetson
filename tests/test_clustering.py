@@ -11,7 +11,7 @@ def test_cluster_embeddings_two_groups():
     group2 = np.random.normal(loc=5.0, scale=0.1, size=(5, 2))
     embeddings = np.vstack([group1, group2])
 
-    labels = cluster_embeddings(embeddings, n_speakers=2, method="torch_spectral", device="cpu")
+    labels = cluster_embeddings(embeddings, n_speakers=2, method="spectral")
 
     assert labels.shape[0] == embeddings.shape[0]
     # On doit avoir au moins 2 clusters différents
@@ -23,6 +23,6 @@ def test_cluster_embeddings_empty_input():
     Test clustering with empty input.
     """
     embeddings = np.zeros((0, 256))  # aucun segment
-    labels = cluster_embeddings(embeddings, n_speakers=2, method="torch_spectral", device="cpu")
+    labels = cluster_embeddings(embeddings, n_speakers=2, method="spectral")
 
     assert labels.shape[0] == 0
