@@ -1,0 +1,3 @@
+Je n'arrive pas à utiliser convenablement Cline avec QwenCoder... Je vais rester avec toi uniquement pour me guider pas à pas.
+J'ai créé un dossier local C:\Users\bertr\PycharmProjects\ASR_Agent dans lequel on va travailler. J'ai aussi un repo github créé dans lequel je peux push mes commits de ce dossier.
+Il faut donc mettre en place une architecture aussi robuste que possible, qui me permettra de créer un container docker avec le workflow suivant
