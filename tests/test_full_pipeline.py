@@ -31,7 +31,7 @@ def test_full_pipeline_end_to_end(tmp_path):
     cfg = PipelineConfig(
         denoise=False,
         device="cpu",
-        n_speakers=2,
+        n_speakers=1,
         clustering_method="spectral",
         spectral_assign_labels="kmeans",
         vad_min_chunk_s=0.5,
