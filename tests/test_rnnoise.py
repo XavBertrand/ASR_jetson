@@ -3,6 +3,8 @@ import subprocess
 import pytest
 from src.preprocessing.rnnoise import apply_rnnoise
 
+from tests.conftest import PROJECT_ROOT
+
 
 @pytest.mark.parametrize("filter_type", ["arnndn", "afftdn"])
 def test_rnnoise_with_ogg(tmp_path: Path, filter_type: str):
@@ -11,10 +13,10 @@ def test_rnnoise_with_ogg(tmp_path: Path, filter_type: str):
     Tries arnndn first; if unavailable, falls back to afftdn.
     """
     # Paths
-    input_file = tmp_path / "test.ogg"
+    input_file = tmp_path / "test.mp3"
     output_file = tmp_path / "denoised.wav"
     model_file = (
-        Path(__file__).resolve().parents[1]
+        PROJECT_ROOT
         / "models"
         / "rnnoise"
         / "somnolent-hogwash-2019-03-29.nn"

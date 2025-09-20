@@ -1,15 +1,18 @@
-import logging
-import json
 import numpy as np
-from pathlib import Path
+from sklearn.cluster import SpectralClustering
 
-def cluster_speakers(embeddings_file: Path, output_path: Path) -> None:
+
+def cluster_speakers(embeddings: np.ndarray, n_speakers: int = 2) -> np.ndarray:
     """
-    Stub for spectral clustering on embeddings.
-    Currently just logs and assigns fake speaker IDs.
+    Cluster embeddings into speakers using spectral clustering.
     """
-    logging.info("Clustering speakers from embeddings -> %s", output_path)
-    embeddings = np.load(embeddings_file)
-    diarization = [{"segment_id": i, "speaker": f"spk{i % 2}"} for i in range(len(embeddings))]
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(diarization, f)
+    if embeddings.shape[0] == 0:
+        return np.array([])
+
+    clustering = SpectralClustering(
+        n_clusters=n_speakers,
+        affinity="nearest_neighbors",
+        assign_labels="kmeans",
+        random_state=42,
+    )
+    return clustering.fit_predict(embeddings)

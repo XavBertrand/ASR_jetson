@@ -1,22 +1,26 @@
 import pytest
 from pathlib import Path
-from preprocessing.vad import apply_vad
+import os
+from src.preprocessing.vad import load_silero_vad, apply_vad
+
+from tests.conftest import PROJECT_ROOT
 
 
-def test_vad(tmp_path: Path):
+def test_vad_on_real_file():
     """
-    Test VAD stub (will be replaced with real Silero).
+    Test Silero VAD sur un vrai fichier audio (tests/data/test.mp3).
+    Vérifie qu'au moins un segment de voix est détecté.
     """
-    input_file = tmp_path / "fake.wav"
-    output_file = tmp_path / "segments.json"
+    input_file = os.path.join(PROJECT_ROOT, "tests", "data", "test.mp3")
+    assert os.path.exists(input_file), "Le fichier de test test.mp3 est manquant dans tests/data/"
 
-    # Create empty fake wav
-    input_file.write_bytes(b"FAKE_WAV")
+    # Charger modèle + VAD
+    model, utils = load_silero_vad()
+    sample_rate = 16000
 
-    # Run VAD
-    apply_vad(input_file, output_file)
+    # Appliquer VAD
+    segments = apply_vad(model, input_file, sample_rate)
 
-    # Assertions
-    assert output_file.exists(), "Segments file not created"
-    data = output_file.read_text(encoding="utf-8")
-    assert "start" in data and "end" in data, "Segments missing fields"
+    # Vérification
+    assert isinstance(segments, list)
+    assert len(segments) > 0, "Aucun segment vocal détecté dans test.mp3"
