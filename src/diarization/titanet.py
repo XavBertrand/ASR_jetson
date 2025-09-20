@@ -5,12 +5,15 @@ import numpy as np
 import torch
 import torchaudio
 import nemo.collections.asr as nemo_asr
+from pathlib import Path
 
-# Conserve la compat compat tests (PROJECT_ROOT vient de tests/conftest)
-try:
-    from tests.conftest import PROJECT_ROOT  # type: ignore
-except Exception:
-    PROJECT_ROOT = None
+# # Conserve la compat compat tests (PROJECT_ROOT vient de tests/conftest)
+# try:
+#     from tests.conftest import PROJECT_ROOT  # type: ignore
+# except Exception:
+#     PROJECT_ROOT = None
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_titanet(
