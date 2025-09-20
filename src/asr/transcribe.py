@@ -1,6 +1,7 @@
 # src/asr/transcribe.py
 from __future__ import annotations
 from pathlib import Path
+from tqdm import tqdm
 from typing import List, Dict, Any, Iterable, Tuple
 
 def _sec(x_samples: int, sr: int = 16000) -> float:
@@ -26,7 +27,7 @@ def transcribe_segments(
     samples = decode_audio(audio_path)  # float32, 16000 Hz si fichier déjà 16k (sinon faster-whisper resample)
 
     out: List[Dict[str, Any]] = []
-    for seg in vad_or_diar_segments:
+    for _, seg in enumerate(tqdm(vad_or_diar_segments)):
         s, e = int(seg["start"]), int(seg["end"])
         if e <= s:
             continue

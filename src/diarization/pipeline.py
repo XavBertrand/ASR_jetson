@@ -12,7 +12,7 @@ from src.diarization.clustering import cluster_embeddings
 def apply_diarization(
     audio_path: str | Path,
     n_speakers: int = 2,
-    device: str = "cpu",
+    device: str = "cuda",
     clustering_method: Literal["spectral", "kmeans"] = "spectral",
 ) -> List[Dict]:
     """

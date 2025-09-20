@@ -1,5 +1,6 @@
 # src/asr/whisper_engine.py
 from __future__ import annotations
+import torch
 from typing import Tuple
 import os
 
@@ -15,6 +16,6 @@ def load_faster_whisper(model_name: str = "tiny", device: str = "cpu", compute_t
     except Exception as e:
         raise RuntimeError(f"faster-whisper indisponible : {e}")
 
-    device = "cuda" if device.startswith("cuda") and os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" else "cpu"
+    device = "cuda" if device.startswith("cuda") and torch.cuda.is_available() != "" else "cpu"
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
     return model, {"device": device, "compute_type": compute_type}

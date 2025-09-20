@@ -10,7 +10,7 @@ import nemo.collections.asr as nemo_asr
 from tests.conftest import PROJECT_ROOT
 
 
-def load_titanet(device="cpu", local_model=os.path.join(PROJECT_ROOT, "models", "nemo", "titanet-s.nemo")):
+def load_titanet(device="cuda", local_model=os.path.join(PROJECT_ROOT, "models", "nemo", "titanet-s.nemo")):
     """
     Load TitaNet-S model for speaker embedding extraction.
 
@@ -43,7 +43,7 @@ def load_titanet(device="cpu", local_model=os.path.join(PROJECT_ROOT, "models", 
     return model
 
 
-def extract_embeddings(model, wav_path, segments, device="cpu"):
+def extract_embeddings(model, wav_path, segments, device="cuda"):
     waveform, sr = torchaudio.load(wav_path)
 
     # Resample si nécessaire

@@ -21,7 +21,7 @@ def test_asr_on_real_file_and_attach_speakers():
 
     # 1) diarisation -> segments + speakers
     try:
-        diar = apply_diarization(audio, n_speakers=2, device="cpu", clustering_method="spectral")
+        diar = apply_diarization(audio, n_speakers=2, device="cuda", clustering_method="spectral")
     except FileNotFoundError as e:
         pytest.skip(f"TitaNet indisponible : {e}")
 
@@ -29,7 +29,7 @@ def test_asr_on_real_file_and_attach_speakers():
 
     # 2) ASR
     try:
-        model, _meta = load_faster_whisper(model_name="tiny", device="cpu", compute_type="int8")
+        model, _meta = load_faster_whisper(model_name="tiny", device="cuda", compute_type="int8")
     except Exception as e:
         pytest.skip(f"faster-whisper indisponible : {e}")
 
