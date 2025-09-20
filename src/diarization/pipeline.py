@@ -1,7 +1,7 @@
 from typing import List, Dict
 from src.preprocessing.vad import load_silero_vad, apply_vad
 from src.diarization.titanet import load_titanet, extract_embeddings
-from src.diarization.clustering import cluster_speakers
+from src.diarization.clustering import cluster_embeddings
 
 from tests.conftest import PROJECT_ROOT
 
@@ -20,14 +20,14 @@ def apply_diarization(wav_path: str, n_speakers: int = 2, device: str = "cpu") -
     titanet = load_titanet(device)
     embeddings = extract_embeddings(titanet, wav_path, vad_segments, device)
 
-    labels = cluster_speakers(embeddings, n_speakers)
+    labels = cluster_embeddings(embeddings, n_speakers=n_speakers)
 
-    diarized = []
+    diarized_segments = []
     for seg, label in zip(vad_segments, labels):
-        diarized.append({
+        diarized_segments.append({
             "start": seg["start"],
             "end": seg["end"],
-            "speaker": f"SPEAKER_{label}"
+            "speaker": int(label),
         })
 
-    return diarized
+    return diarized_segments
