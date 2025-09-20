@@ -14,7 +14,7 @@ def test_diarization_on_real_file_integration():
     """
     # Import tardif pour laisser pytest découvrir le test même si nemo n'est pas installé
     try:
-        from src.diarization.pipeline import apply_diarization
+        from src.diarization.pipeline_diarization import apply_diarization
     except Exception as e:
         pytest.skip(f"Pipeline import failed (probable dépendance manquante) : {e}")
 
@@ -28,7 +28,7 @@ def test_diarization_on_real_file_integration():
         diarized = apply_diarization(
             audio_path,
             n_speakers=2,
-            device="cpu",  # forcer CPU en CI
+            device="cuda",
             clustering_method="spectral"  # identique à ta pipeline
         )
     except FileNotFoundError as e:

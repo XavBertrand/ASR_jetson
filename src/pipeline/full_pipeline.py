@@ -12,7 +12,7 @@ from src.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
 # VAD
 from src.preprocessing.vad import load_silero_vad, apply_vad
 # Diarization
-from src.diarization.pipeline import apply_diarization
+from src.diarization.pipeline_diarization import apply_diarization
 # ASR
 from src.asr.whisper_engine import load_faster_whisper
 from src.asr.transcribe import transcribe_segments, attach_speakers
@@ -47,7 +47,7 @@ def _write_srt(segments: List[Dict], path: Path):
 @dataclass
 class PipelineConfig:
     denoise: bool = True             # applique RNNoise/afftdn
-    device: str = "cpu"              # "cpu" | "cuda"
+    device: str = "cuda"              # "cpu" | "cuda"
     n_speakers: int = 2
     clustering_method: str = "spectral"      # "spectral" | "kmeans"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
@@ -80,8 +80,6 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         n_speakers=cfg.n_speakers,
         device=device,
         clustering_method=cfg.clustering_method,
-        spectral_assign_labels=cfg.spectral_assign_labels,
-        min_chunk_len=cfg.vad_min_chunk_s,
     )  # -> [{start,end,start_s,end_s,speaker}, ...]
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}

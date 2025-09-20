@@ -1,4 +1,4 @@
-# src/diarization/pipeline.py
+# src/diarization/pipeline_diarization.py
 from __future__ import annotations
 
 from pathlib import Path

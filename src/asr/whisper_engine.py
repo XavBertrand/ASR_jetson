@@ -4,7 +4,7 @@ import torch
 from typing import Tuple
 import os
 
-def load_faster_whisper(model_name: str = "tiny", device: str = "cpu", compute_type: str = "int8") -> Tuple[object, dict]:
+def load_faster_whisper(model_name: str = "tiny", device: str = "cuda", compute_type: str = "int8") -> Tuple[object, dict]:
     """
     Charge le modèle faster-whisper.
     - model_name: tiny | base | small | medium | large-v3 (pour CI : tiny/base conseillés)
