@@ -10,17 +10,29 @@ def _normalize_ws(s: str) -> str:
     return s
 
 def _fix_fr_punct(s: str) -> str:
-    # espaces françaises autour ; : ! ? . , (simples heuristiques)
-    s = re.sub(r"\s*([,;:!?])\s*", r" \1 ", s)
-    s = re.sub(r"\s*\.\s*", ". ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    # apostrophes (’)
+    # Normalise les espaces de base
+    s = re.sub(r"\s+", " ", s.strip())
+
+    # 1) Supprimer les espaces AVANT la ponctuation
+    #    -> "locuteur , ouverture"  => "locuteur, ouverture"
+    s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+
+    # 2) Forcer exactement UN espace APRÈS la ponctuation (si un caractère suit)
+    #    -> "bien!on" => "bien! on"
+    s = re.sub(r"([,;:!?])(?=\S)", r"\1 ", s)
+    s = re.sub(r"([.])(?=\S)", r"\1 ", s)
+
+    # 3) Apostrophes françaises
     s = s.replace(" '", " ’").replace("' ", "’ ").replace("'", "’")
-    # capitale en début de phrase très simple
+    s = re.sub(r"\b([cdjlmnstCDJLMNST])\s*’\s*([aeéèêiouhAEÉÈÊIOUH])", r"\1’\2", s)
+
+    # 4) Capitalisation simple en début de phrase
     s = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
-    # pas d’espace avant .,!?;:
-    s = re.sub(r"\s+([.!?;:])", r"\1", s)
-    return s.strip()
+
+    # 5) Nettoyage final
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
 
 def _clean_text(s: str) -> str:
     s = _normalize_ws(s)
