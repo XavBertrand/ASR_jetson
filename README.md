@@ -40,6 +40,10 @@ It combines noise suppression, Voice Activity Detection (VAD), speaker diarizati
 ├── scripts/
 │   └──run_asr_pipeline.py # Wrapper for full pipeline execution
 │
+├── docker/
+│   ├── Dockerfile           # Multi arch (x86_64 and arm64) docker file
+│   └── requirements.txt     # python packages requirements
+│
 ├── src/
 │   ├── preprocessing/      # RNNoise wrapper
 │   ├── vad/                # Silero VAD integration
@@ -82,7 +86,16 @@ source .venv/bin/activate  # (Linux/Mac)
 pip install -r requirements.txt
 ```
 
----
+## Build multi-arch Docker image
+
+Linux / macOS / WSL:
+```bash
+./docker/build.sh
+```
+Windows Powershell:
+```bash
+.\docker\build.ps1
+```
 
 ## ▶️ Usage
 
