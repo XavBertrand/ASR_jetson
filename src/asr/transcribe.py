@@ -12,7 +12,8 @@ def transcribe_segments(
     audio_path: str | Path,
     vad_or_diar_segments: List[Dict[str, int]],
     language: str = "fr",
-    beam_size: int = 1,
+    beam_size: int = 5,
+    best_of: int = 5,
     no_speech_threshold: float | None = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -38,9 +39,11 @@ def transcribe_segments(
             chunk,
             language=language,
             beam_size=beam_size,
+            best_of=best_of,
             vad_filter=False,      # VAD déjà fait
             no_speech_threshold=no_speech_threshold,
             word_timestamps=True,  # pratique pour aligner les mots si voulu
+            task="transcribe",
         )
 
         # Concatène le texte de toutes les sous-parties du chunk
