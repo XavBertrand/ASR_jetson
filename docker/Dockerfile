@@ -1,94 +1,27 @@
-# syntax=docker/dockerfile:1.7-labs
+# Image NVIDIA officielle avec CUDA 12.4 + PyTorch
+FROM nvcr.io/nvidia/pytorch:24.05-py3
 
-################################################################################
-# Bases par architecture
-################################################################################
-ARG BASE_AMD64=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
-ARG BASE_ARM64=nvcr.io/nvidia/l4t-ml:r36.2.0-py3
-# On déclare TARGETARCH ici (et on le redéclarera avant le FROM final)
-ARG TARGETARCH
-
-############################
-# Stage: base for amd64
-############################
-FROM --platform=linux/amd64 ${BASE_AMD64} AS base_amd64
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    TOKENIZERS_PARALLELISM=false \
-    OMP_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1
-
+# Installer quelques dépendances système utiles
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv python3-dev \
-    git curl ca-certificates \
-    ffmpeg libsndfile1 \
-    build-essential g++ gcc make cmake pkg-config \
+    ffmpeg \
+    libsndfile1 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
+# Définir le dossier de travail
+WORKDIR /workspace
 
-# PyTorch CUDA (x86) – adapte la série CUDA si besoin
-ARG PYTORCH_CUDA=124
-RUN python3 -m pip install --upgrade pip setuptools wheel \
- && python3 -m pip install --index-url https://download.pytorch.org/whl/cu${PYTORCH_CUDA} \
-        torch torchvision torchaudio
+# Ajouter le repo dans le PYTHONPATH
+ENV PYTHONPATH=/workspace
 
-############################
-# Stage: base for arm64 (Jetson)
-############################
-FROM --platform=linux/arm64 ${BASE_ARM64} AS base_arm64
+# Copier requirements
+COPY docker/requirements.txt ./requirements.txt
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    TOKENIZERS_PARALLELISM=false \
-    OMP_NUM_THREADS=1
+# Installer les dépendances Python
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip python3-dev \
-    git curl ca-certificates \
-    ffmpeg libsndfile1 \
-    build-essential g++ gcc make cmake pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+# Copier ton code
+COPY . .
 
-
-RUN python3 -m pip install --upgrade pip setuptools wheel
-
-############################
-# Stage runtime commun (sélection par arch)
-############################
-# IMPORTANT: redéclarer TARGETARCH juste avant ce FROM
-ARG TARGETARCH
-FROM base_${TARGETARCH} AS runtime
-
-WORKDIR /app
-
-# Déps Python (hors torch/torchaudio déjà gérés par les bases)
-COPY docker/requirements.txt /app/docker/requirements.txt
-RUN python3 -m pip install -r /app/docker/requirements.txt
-
-# Optionnel: NeMo/TitaNet-S si demandé (lourd)
-ARG WITH_NEMO=0
-RUN if [ "$WITH_NEMO" = "1" ]; then \
-      python3 -m pip install --upgrade pip setuptools wheel build && \
-      # pré-installer texterrors en mode PEP517 (évite le legacy)
-      python3 -m pip install --use-pep517 texterrors && \
-      # installer NeMo ASR + compat lightning
-      python3 -m pip install --use-pep517 'nemo_toolkit[asr]==2.4.0' 'pytorch-lightning<2.4'; \
-    fi
-
-
-ENV CT2_VERBOSE=0
-
-# Copie du projet
-COPY . /app
-
-# Sanity check CUDA
-RUN python3 - <<'PY'
-import torch
-print("Torch:", torch.__version__, "| CUDA:", torch.cuda.is_available())
-print("GPU count:", torch.cuda.device_count())
-PY
-
-ENTRYPOINT ["/bin/bash"]
+# Commande par défaut (peut être écrasée avec docker run)
+CMD ["python", "scripts/run_asr_pipeline.py", "tests/data/test.mp3", "--out", "outputs", "--lang", "fr", "--ns", "1"]

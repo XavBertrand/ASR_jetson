@@ -8,7 +8,7 @@ librosa==0.11.0
 ffmpeg-python
 
 # --- ASR (faster-whisper) ---
-# NOTE: torch/torchaudio sont installés par le Dockerfile selon l'arch (CUDA vs Jetson).
+# NOTE: torch est installé par le Dockerfile selon l'arch (CUDA vs Jetson).
 faster-whisper            # tire ctranslate2, tokenizers, sentencepiece
 
 # --- Optionnel mais utile ---
@@ -23,6 +23,7 @@ braceexpand
 editdistance
 wget
 tensorboard
+torchaudio
 
 # ---- REMARQUE NEMO / TitaNet-S ----
 # nemo_toolkit[asr] est lourd & sensible aux versions sur Jetson.
