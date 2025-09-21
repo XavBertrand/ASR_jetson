@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Literal
 
-from src.preprocessing.vad import load_silero_vad, apply_vad
+from src.vad.vad import load_silero_vad, apply_vad
 from src.diarization.titanet import load_titanet, extract_embeddings
 from src.diarization.clustering import cluster_embeddings
 

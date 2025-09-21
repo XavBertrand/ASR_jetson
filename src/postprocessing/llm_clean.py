@@ -1,0 +1,135 @@
+# src/postprocessing/llm_clean.py
+from __future__ import annotations
+import os
+from pathlib import Path
+import json
+import re
+import time
+import requests
+from typing import Optional
+
+SYS_PROMPT = (
+    "Tu es un assistant de post-édition pour de la transcription française. "
+    "Règles: 1) Corrige orthographe, grammaire, accords, ponctuation française (espaces fines avant ; : ! ? facultatives, mais espace normal OK), "
+    "2) Garde le sens AU PLUS PROCHE possible, 3) Ne SUPPRIME pas d'information sémantique, "
+    "4) Ne réinvente rien, 5) Conserve la structure et les tags de locuteur 'SPEAKER_X:' "
+    "6) Fusionne les micro-bégaiements évidents, 7) Ne change pas les numéros de SPEAKER."
+)
+
+USER_INSTR = (
+    "Voici un texte de transcription avec des blocs par locuteur.\n"
+    "Corrige-le selon les règles. Retourne UNIQUEMENT le texte corrigé, même format (lignes commençant par 'SPEAKER_X: ')."
+)
+
+def _basic_local_cleanup(text: str) -> str:
+    """Fallback minimal si aucun LLM dispo (sécurise la pipeline)."""
+    # Espace/ponctuation simple
+    s = re.sub(r"\s+", " ", text).strip()
+    s = re.sub(r"\s+([,.;:!?])", r"\1", s)
+    s = re.sub(r"([,;:!?])(?=\S)", r"\1 ", s)
+    s = s.replace(" '", " ’").replace("' ", "’ ").replace("'", "’")
+    # Début de phrase simple (prudence)
+    s = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
+    # Remettre retours à la ligne avant chaque SPEAKER pour relire proprement
+    s = re.sub(r"\s*(SPEAKER_\d+:)", r"\n\1 ", s).strip()
+    s = re.sub(r"\n+", "\n", s)
+    return s
+
+def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, text: str, timeout_s: int = 120) -> Optional[str]:
+    """
+    Appelle une API 'OpenAI-compatible' (TensorRT-LLM engine server, vLLM, LM Studio, OpenRouter local, etc.)
+    """
+    url = endpoint.rstrip("/") + "/v1/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYS_PROMPT},
+            {"role": "user", "content": USER_INSTR + "\n\n" + text},
+        ],
+        "temperature": 0.1,
+        "max_tokens": max(512, min(4096, len(text.split()) * 2)),
+        "stream": False,
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+    if r.status_code == 200:
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    return None
+
+def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
+    """
+    Appelle un serveur Ollama local (http://localhost:11434) si dispo.
+    """
+    url = "http://localhost:11434/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYS_PROMPT},
+            {"role": "user", "content": USER_INSTR + "\n\n" + text},
+        ],
+        "options": {"temperature": 0.1},
+        "stream": False,
+    }
+    r = requests.post(url, json=payload, timeout=timeout_s)
+    if r.status_code == 200:
+        return r.json().get("message", {}).get("content", "").strip()
+    return None
+
+def clean_text_with_llm(
+    input_txt: Path,
+    output_txt: Path,
+    default_model: str = "Qwen2.5-1.5B-Instruct",
+) -> Path:
+    """
+    Lit 'input_txt', corrige le texte avec un LLM léger (Qwen 2.5 1.5B instruct), écrit 'output_txt'.
+    Backends supportés (dans cet ordre):
+      1) API OpenAI-compatible via LLM_ENDPOINT (+ LLM_API_KEY optionnel) et LLM_MODEL,
+      2) Ollama local (http://localhost:11434) via OLLAMA_MODEL,
+      3) Fallback nettoyage regex local si aucun backend n'est dispo/répondant.
+
+    Variables d'env (optionnelles):
+      - LLM_ENDPOINT (ex: http://qwen-api:8000  ou http://localhost:8000)
+      - LLM_API_KEY  (si nécessaire, sinon vide accepté)
+      - LLM_MODEL    (par défaut: Qwen2.5-1.5B-Instruct)
+      - OLLAMA_MODEL (ex: qwen2.5:1.5b-instruct)
+
+    Retourne le path de output_txt.
+    """
+    input_txt = Path(input_txt)
+    output_txt = Path(output_txt)
+    output_txt.parent.mkdir(parents=True, exist_ok=True)
+
+    raw = input_txt.read_text(encoding="utf-8")
+
+    # 1) OpenAI-compatible
+    endpoint = os.getenv("LLM_ENDPOINT", "").strip()
+    if endpoint:
+        model = os.getenv("LLM_MODEL", default_model).strip() or default_model
+        api_key = os.getenv("LLM_API_KEY", "").strip() or None
+        try:
+            out = _call_openai_compatible(endpoint, api_key, model, raw)
+            if out:
+                output_txt.write_text(out + ("\n" if not out.endswith("\n") else ""), encoding="utf-8")
+                return output_txt
+        except Exception:
+            pass
+
+    # 2) Ollama local
+    ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
+    if ollama_model:
+        try:
+            out = _call_ollama(ollama_model, raw)
+            if out:
+                output_txt.write_text(out + ("\n" if not out.endswith("\n") else ""), encoding="utf-8")
+                return output_txt
+        except Exception:
+            pass
+
+    # 3) Fallback regex minimal (toujours fonctionner)
+    cleaned = _basic_local_cleanup(raw)
+    output_txt.write_text(cleaned + ("\n" if not cleaned.endswith("\n") else ""), encoding="utf-8")
+    return output_txt

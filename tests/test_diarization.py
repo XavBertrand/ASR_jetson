@@ -27,7 +27,7 @@ def test_diarization_on_real_file_integration():
     try:
         diarized = apply_diarization(
             audio_path,
-            n_speakers=2,
+            n_speakers=1,
             device="cuda",
             clustering_method="spectral"  # identique à ta pipeline
         )

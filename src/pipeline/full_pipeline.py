@@ -10,12 +10,14 @@ from typing import List, Dict, Optional
 # Denoise
 from src.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
 # VAD
-from src.preprocessing.vad import load_silero_vad, apply_vad
 # Diarization
 from src.diarization.pipeline_diarization import apply_diarization
 # ASR
 from src.asr.whisper_engine import load_faster_whisper
 from src.asr.transcribe import transcribe_segments, attach_speakers
+
+from src.postprocessing.text_export import write_single_block_per_speaker_txt
+from src.postprocessing.llm_clean import clean_text_with_llm
 
 # --- Helpers ---
 def _ensure_parent(p: Path):
@@ -52,7 +54,7 @@ class PipelineConfig:
     clustering_method: str = "spectral"      # "spectral" | "kmeans"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
     vad_min_chunk_s: float = 0.5
-    whisper_model: str = "tiny"      # tiny/base/small/...
+    whisper_model: str = "medium"      # tiny/base/small/...
     whisper_compute: str = "int8"    # int8/int8_float16/float16/float32
     language: Optional[str] = None   # None = auto
     out_dir: Path = Path("outputs")  # où écrire JSON/SRT/WAV intermediaire
@@ -100,8 +102,14 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     _ensure_parent(cfg.out_dir / "json")
     _ensure_parent(cfg.out_dir / "srt")
 
-    out_json = cfg.out_dir / "json" / (Path(audio_path).stem + ".json")
-    out_srt  = cfg.out_dir / "srt" /  (Path(audio_path).stem + ".srt")
+    root_dir = Path(__file__).resolve().parents[2]
+    os.makedirs(os.path.join(root_dir, cfg.out_dir, "json"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
+
+    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + ".json")
+    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + ".srt")
+    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
 
     # pour le SRT : array avec secondes & string speaker
     srt_payload = [
@@ -126,7 +134,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         out_srt,
     )
 
-    with out_json.open("w", encoding="utf-8") as f:
+    with open(out_json, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "audio": str(Path(audio_path).resolve()),
@@ -138,6 +146,29 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
             ensure_ascii=False,
             indent=2,
         )
+
+    labeled_for_txt = [
+        {
+            "start": seg.get("start_s", seg.get("start")),
+            "end": seg.get("end_s", seg.get("end")),
+            "text": seg.get("text", ""),
+            "speaker": seg.get("speaker", 0),
+        }
+        for seg in labeled
+    ]
+
+    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
+    out_txt.parent.mkdir(parents=True, exist_ok=True)
+
+    write_single_block_per_speaker_txt(
+        labeled_for_txt,
+        out_path=out_txt,
+        header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (ligne titre)
+    )
+
+    # === NOUVEAU : post-correction LLM -> n'écrase pas le .txt original ===
+    out_txt_clean = root_dir / cfg.out_dir / "txt" / "test_clean.txt"
+    clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     return {
         "diarization": diar_segments,

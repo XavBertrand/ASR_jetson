@@ -11,7 +11,7 @@ def transcribe_segments(
     model,
     audio_path: str | Path,
     vad_or_diar_segments: List[Dict[str, int]],
-    language: str | None = None,
+    language: str = "fr",
     beam_size: int = 1,
     no_speech_threshold: float | None = None,
 ) -> List[Dict[str, Any]]:

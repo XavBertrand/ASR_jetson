@@ -1,7 +1,5 @@
-import pytest
-from pathlib import Path
 import os
-from src.preprocessing.vad import load_silero_vad, apply_vad
+from src.vad.vad import load_silero_vad, apply_vad
 
 from tests.conftest import PROJECT_ROOT
 

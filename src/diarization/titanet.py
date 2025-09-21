@@ -1,106 +1,154 @@
+import os
+from typing import List, Dict, Optional
+
+import numpy as np
 import torch
 import torchaudio
-import numpy as np
 import nemo.collections.asr as nemo_asr
-from typing import List, Dict
-import os
+from pathlib import Path
 
-import nemo.collections.asr as nemo_asr
+# # Conserve la compat compat tests (PROJECT_ROOT vient de tests/conftest)
+# try:
+#     from tests.conftest import PROJECT_ROOT  # type: ignore
+# except Exception:
+#     PROJECT_ROOT = None
 
-from tests.conftest import PROJECT_ROOT
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def load_titanet(device="cuda", local_model=os.path.join(PROJECT_ROOT, "models", "nemo", "titanet-s.nemo")):
+def load_titanet(
+    device: str = "cpu",
+    local_model: Optional[str] = None,
+):
     """
-    Load TitaNet-S model for speaker embedding extraction.
+    Charge TitaNet-S pour l'extraction d'embeddings orateurs.
 
     Args:
-        device (str): "cpu" or "cuda"
-        local_model (str): path to a local .nemo file for tests
+        device: "cpu" ou "cuda[:id]"
+        local_model: chemin d'un .nemo local (tests), sinon tente NGC.
 
     Returns:
-        EncDecSpeakerLabelModel
+        EncDecSpeakerLabelModel (en mode eval, sur le bon device)
     """
-    # Si un modèle local existe → priorité
-    if os.path.exists(local_model):
+    if local_model is None and PROJECT_ROOT is not None:
+        local_model = os.path.join(PROJECT_ROOT, "models", "nemo", "titanet-s.nemo")
+
+    if local_model and os.path.exists(local_model):
         print(f"[INFO] Loading TitaNet from local file: {local_model}")
-        model = nemo_asr.models.EncDecSpeakerLabelModel.restore_from(local_model, map_location=device)
+        model = nemo_asr.models.EncDecSpeakerLabelModel.restore_from(
+            local_model, map_location=device
+        )
     else:
-        # Sinon essayer via NGC
         try:
             print("[INFO] Loading TitaNet-S from NGC")
-            model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained("titanet_s", map_location=device)
+            model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
+                "titanet_s", map_location=device
+            )
         except Exception as e:
             raise FileNotFoundError(
-                f"TitaNet-S not found locally or on NGC.\n"
+                "TitaNet-S not found locally or on NGC.\n"
                 f"Tried local_model={local_model}\n"
                 f"Error: {e}"
             )
 
-    # IMPORTANT: Mettre le modèle en mode evaluation pour l'inférence
-    model.eval()
-
+    model.to(device)
+    model.eval()  # IMPORTANT pour BN / Dropout
     return model
 
 
-def extract_embeddings(model, wav_path, segments, device="cuda"):
-    waveform, sr = torchaudio.load(wav_path)
+def _l2_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Normalisation L2 par vecteur (N, D) -> (N, D)."""
+    denom = torch.clamp(torch.norm(x, p=2, dim=-1, keepdim=True), min=eps)
+    return x / denom
 
-    # Resample si nécessaire
+
+def extract_embeddings(
+    model,
+    wav_path,
+    segments: List[Dict],
+    device: str = "cpu",
+    batch_size: int = 16,
+    min_len_samples: int = 1600,  # ~0.1s à 16k
+    l2_normalize: bool = True,
+) -> np.ndarray:
+    """
+    Extrait des embeddings TitaNet pour une liste de segments (indices en samples @16k).
+
+    - Lit/convertit l'audio en mono/16k si besoin.
+    - Batcher les segments avec padding dynamique et lengths.
+    - Normalise L2 les embeddings (optionnel).
+
+    Returns:
+        numpy array (num_segments, emb_dim) — peut être vide (0, D).
+    """
+    waveform, sr = torchaudio.load(wav_path)
     if sr != 16000:
         waveform = torchaudio.functional.resample(waveform, sr, 16000)
         sr = 16000
 
+    # Mono sûr
+    if waveform.ndim > 1 and waveform.shape[0] > 1:
+        waveform = torch.mean(waveform, dim=0, keepdim=True)
+
     signal = waveform.to(device)
 
-    embeddings = []
+    # Clamp + padding éventuel des segments très courts
+    chunks: List[torch.Tensor] = []
+    lengths: List[int] = []
 
-    # S'assurer que le modèle est en mode evaluation
+    sig_len = int(signal.shape[1])
+    for seg in segments:
+        start, end = int(seg["start"]), int(seg["end"])
+        start = max(0, min(start, sig_len))
+        end = max(0, min(end, sig_len))
+
+        if end <= start:
+            continue
+
+        chunk = signal[:, start:end]
+        if chunk.shape[1] < min_len_samples:
+            pad = min_len_samples - chunk.shape[1]
+            chunk = torch.nn.functional.pad(chunk, (0, pad))
+
+        # TitaNet attend [B, T], on s'assure d'un batch plus tard
+        # Ici chunk est [1, T], c'est parfait
+        chunks.append(chunk.squeeze(0))  # (T,)
+        lengths.append(int(chunk.shape[1]))
+
+    if not chunks:
+        # Taille d'embedding connue de TitaNet-S : 192
+        return np.zeros((0, 192), dtype=np.float32)
+
+    # Batching avec padding max_len par batch
+    embeddings_all: List[np.ndarray] = []
     model.eval()
+    with torch.inference_mode():
+        for i in range(0, len(chunks), batch_size):
+            batch_sig = chunks[i : i + batch_size]
+            batch_len = lengths[i : i + batch_size]
 
-    with torch.no_grad():  # Désactiver les gradients pour l'inférence
-        for seg in segments:
-            start, end = seg["start"], seg["end"]
+            max_len = max(batch_len)
+            # Empile en [B, T] avec padding right
+            padded = torch.stack(
+                [torch.nn.functional.pad(x, (0, max_len - x.shape[0])) for x in batch_sig],
+                dim=0,
+            ).to(device)  # (B, T)
 
-            # Clamp indices pour éviter dépassement
-            start = max(0, min(start, signal.shape[1]))
-            end = max(0, min(end, signal.shape[1]))
+            len_tensor = torch.tensor(batch_len, device=device, dtype=torch.int64)
 
-            chunk = signal[:, start:end]
-            if chunk.shape[1] == 0:
-                continue
+            # forward -> tuple(embeddings, ...) parfois ; on récupère le 1er
+            out = model.forward(input_signal=padded, input_signal_length=len_tensor)
+            if isinstance(out, tuple):
+                out = out[0]
 
-            # Vérifier la longueur minimale du segment
-            min_length = 1600  # 0.1 seconde à 16kHz
-            if chunk.shape[1] < min_length:
-                # Padding si le segment est trop court
-                pad_length = min_length - chunk.shape[1]
-                chunk = torch.nn.functional.pad(chunk, (0, pad_length))
+            # out attendu [B, D]
+            if out.ndim == 1:
+                out = out.unsqueeze(0)
 
-            if chunk.ndim > 2:
-                chunk = chunk.squeeze()  # devient [samples]
-            if chunk.ndim == 1:
-                chunk = chunk.unsqueeze(0)  # devient [1, samples]
+            if l2_normalize:
+                out = _l2_normalize(out)
 
-            emb = model.forward(
-                input_signal=chunk,
-                input_signal_length=torch.tensor([chunk.shape[1]]).to(device),
-            )
+            embeddings_all.append(out.detach().cpu().to(torch.float32).numpy())
 
-            # model.forward() retourne un tuple, récupérer les embeddings
-            if isinstance(emb, tuple):
-                # Debug: voir le contenu du tuple si nécessaire
-                # print(f"[DEBUG] model.forward() returned tuple of length {len(emb)}")
-                # print(f"[DEBUG] Types: {[type(x) for x in emb]}")
-                emb = emb[0]  # Premier élément du tuple contient les embeddings
-
-            # Vérifier que emb est bien un tensor
-            if not isinstance(emb, torch.Tensor):
-                raise ValueError(f"Expected torch.Tensor, got {type(emb)}")
-
-            embeddings.append(emb.cpu().detach().numpy())
-
-    if len(embeddings) == 0:
-        return np.zeros((0, model._cfg.get("emb_dim", 192)))
-
-    return np.vstack(embeddings)
+    embs = np.vstack(embeddings_all) if embeddings_all else np.zeros((0, 192), dtype=np.float32)
+    return embs
