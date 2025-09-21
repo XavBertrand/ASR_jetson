@@ -88,14 +88,63 @@ pip install -r requirements.txt
 
 ## Build multi-arch Docker image
 
-Linux / macOS / WSL:
+### Linux / macOS / WSL (bash)
+
+#### Build local (amd64, image chargée en local pour test)
 ```bash
-./docker/build.sh
+docker buildx build \
+  --builder asr-builder \
+  --platform linux/amd64 \
+  --build-arg TARGETARCH=amd64 \
+  --build-arg WITH_NEMO=1 \
+  -t xavier/asr-agent:dev \
+  -f docker/Dockerfile \
+  --load \
+  .
 ```
-Windows Powershell:
+
+#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
 ```bash
-.\docker\build.ps1
+docker buildx build \
+  --builder asr-builder \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg WITH_NEMO=1 \
+  -t tonuser/asr-agent:latest \
+  -f docker/Dockerfile \
+  --push \
+  .
 ```
+
+---
+
+### Windows (PowerShell)
+
+#### Build local (amd64, image chargée en local pour test)
+```powershell
+docker buildx build `
+  --builder asr-builder `
+  --platform linux/amd64 `
+  --build-arg TARGETARCH=amd64 `
+  --build-arg WITH_NEMO=1 `
+  -t xavier/asr-agent:dev `
+  -f docker/Dockerfile `
+  --load `
+  .
+```
+
+#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
+```powershell
+docker buildx build `
+  --builder asr-builder `
+  --platform linux/amd64,linux/arm64 `
+  --build-arg WITH_NEMO=1 `
+  -t tonuser/asr-agent:latest `
+  -f docker/Dockerfile `
+  --push `
+  .
+```
+
+---
 
 ## ▶️ Usage
 
