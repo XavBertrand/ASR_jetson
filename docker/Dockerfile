@@ -22,8 +22,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv python3-dev \
-    git curl ca-certificates ffmpeg libsndfile1 \
+    git curl ca-certificates \
+    ffmpeg libsndfile1 \
+    build-essential g++ gcc make cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
 
 # PyTorch CUDA (x86) – adapte la série CUDA si besoin
 ARG PYTORCH_CUDA=124
@@ -44,8 +47,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev \
-    git curl ca-certificates ffmpeg libsndfile1 \
+    git curl ca-certificates \
+    ffmpeg libsndfile1 \
+    build-essential g++ gcc make cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
 
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
@@ -65,8 +71,13 @@ RUN python3 -m pip install -r /app/docker/requirements.txt
 # Optionnel: NeMo/TitaNet-S si demandé (lourd)
 ARG WITH_NEMO=0
 RUN if [ "$WITH_NEMO" = "1" ]; then \
-      python3 -m pip install 'nemo_toolkit[asr]==2.4.0' 'pytorch-lightning<2.4'; \
+      python3 -m pip install --upgrade pip setuptools wheel build && \
+      # pré-installer texterrors en mode PEP517 (évite le legacy)
+      python3 -m pip install --use-pep517 texterrors && \
+      # installer NeMo ASR + compat lightning
+      python3 -m pip install --use-pep517 'nemo_toolkit[asr]==2.4.0' 'pytorch-lightning<2.4'; \
     fi
+
 
 ENV CT2_VERBOSE=0
 
