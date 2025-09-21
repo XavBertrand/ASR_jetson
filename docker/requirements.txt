@@ -1,3 +1,33 @@
+# --- Core utils ---
 numpy
 scikit-learn
+tqdm
+pydub
+soundfile          # libsndfile côté système
+librosa==0.11.0
 ffmpeg-python
+
+# --- Torch stack (CPU) ---
+torch==2.6.0+cpu
+torchaudio==2.6.0+cpu
+# NB: si tu veux une build CUDA, installe les wheels +cuXX correspondants (voir Dockerfile GPU plus bas).
+
+# --- ASR (faster-whisper) ---
+faster-whisper     # tire ctranslate2, tokenizers, sentencepiece
+
+# --- Optionnel mais pratique ---
+huggingface_hub
+
+# Gros paquet – à éviter sur Jetson/CI par défaut
+nemo_toolkit[asr]==2.4.0
+onnx>=1.14
+jiwer<4
+marshmallow
+pyloudnorm
+resampy
+wrapt
+braceexpand
+editdistance
+wget
+tensorboard
+

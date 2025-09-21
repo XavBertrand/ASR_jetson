@@ -37,21 +37,30 @@ It combines noise suppression, Voice Activity Detection (VAD), speaker diarizati
 ## 📂 Repository Structure
 
 ```
+├── scripts/
+│   └──run_asr_pipeline.py # Wrapper for full pipeline execution
+│
 ├── src/
-│   ├── noise/              # RNNoise wrapper
+│   ├── preprocessing/      # RNNoise wrapper
 │   ├── vad/                # Silero VAD integration
 │   ├── diarization/        # TitaNet-S embeddings + clustering
 │   ├── asr/                # FasterWhisper / FastConformer ASR
-│   ├── pipeline.py         # End-to-end pipeline orchestration
+│   ├── postprocessing/     # Text export functions
+│   ├── pipeline/           # End-to-end pipeline orchestration
 │   └── utils/              # Helper functions
 │
 ├── tests/                  # Unit & integration tests (pytest)
-│   ├── test_pipeline.py
+│   ├── test_full_pipeline.py
+│   ├── ...
 │   └── data/               # Test audio files
+│
+├── models/                 # Some of the light AI models
+│   ├── nemo/               # TitaNet-S weights
+│   ├── rnnoise/            # RNNoise weigths
 │
 ├── requirements.txt        # Dependencies
 ├── README.md               # Project documentation
-└── streamlit_app.py        # Simple UI demo with Streamlit
+
 ```
 
 ---

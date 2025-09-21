@@ -10,7 +10,6 @@ from typing import List, Dict, Optional
 # Denoise
 from src.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
 # VAD
-from src.preprocessing.vad import load_silero_vad, apply_vad
 # Diarization
 from src.diarization.pipeline_diarization import apply_diarization
 # ASR
@@ -18,6 +17,7 @@ from src.asr.whisper_engine import load_faster_whisper
 from src.asr.transcribe import transcribe_segments, attach_speakers
 
 from src.postprocessing.text_export import write_single_block_per_speaker_txt
+from src.postprocessing.llm_clean import clean_text_with_llm
 
 # --- Helpers ---
 def _ensure_parent(p: Path):
@@ -165,6 +165,10 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         out_path=out_txt,
         header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (ligne titre)
     )
+
+    # === NOUVEAU : post-correction LLM -> n'écrase pas le .txt original ===
+    out_txt_clean = root_dir / cfg.out_dir / "txt" / "test_clean.txt"
+    clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     return {
         "diarization": diar_segments,
