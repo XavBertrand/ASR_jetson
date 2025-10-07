@@ -1,80 +1,83 @@
-# -----------------------------------------------------------------------------
-# STAGE 0: base CUDA/cuDNN/TensorRT/PyTorch via L4T (Jetson)
-# Choisis UNE base selon ta version de JetPack installée sur l'Orin.
-#   - JetPack 6.x : nvcr.io/nvidia/l4t-ml:36.3.0-py3  (exemple tag)
-#   - JetPack 5.x : nvcr.io/nvidia/l4t-ml:r35.4.1-py3 (exemple tag)
-# Vérifie la compat exacte sur: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/l4t-ml
-# -----------------------------------------------------------------------------
-ARG L4T_TAG=36.3.0-py3
+# =============================================================================
+# Dockerfile Jetson (arm64) — ASR pipeline
+# Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
+# JetPack 6.x : r36.x   |   JetPack 5.x : r35.x
+# Catalogue NGC : nvcr.io/nvidia/l4t-ml:<TAG>
+# =============================================================================
+
+# ------------ Choisir ta version JetPack ------------
+# JetPack 6.x (Orin, Ubuntu 22.04 sur JP6) :
+ARG L4T_TAG=r36.3.0-py3
+# JetPack 5.x (si nécessaire) :
+# ARG L4T_TAG=r35.4.1-py3
+
+# ------------ Base commune ------------
 FROM nvcr.io/nvidia/l4t-ml:${L4T_TAG} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    UVICORN_WORKERS=1 \
-    TZ=Etc/UTC
+    TZ=Etc/UTC \
+    OMP_NUM_THREADS=1
 
-# Outils système minimaux
+# Outils système minimaux + audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git wget curl ca-certificates tzdata tini \
       libsndfile1 ffmpeg \
-      && rm -rf /var/lib/apt/lists/*
-
-# (Optionnel) Définis Python 3.X exact si fourni par l'image
-# RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+    && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
-# STAGE 1: builder - installe dépendances Python depuis requirements
-# NB: pas d’exec CUDA ici (le build GitHub tourne sous QEMU, sans GPU).
+# STAGE: builder — installe uniquement les dépendances Python
+# (AUCUNE exécution CUDA/GPU ici : le build CI tourne sous QEMU arm64)
 # -----------------------------------------------------------------------------
 FROM base AS builder
-
-# Copie seulement les manifestes de deps pour profiter du cache Docker
 WORKDIR /app
-COPY requirements.txt requirements.txt
 
-# Recommandé: pinner torch/torchaudio/onnxruntime-gpu aux versions compatibles JetPack
-# (beaucoup d’images l4t-ml incluent déjà torch + torchaudio + tensorrt)
-# Si tu utilises du pur CPU sur Jetson, onnxruntime (arm64) peut suffire.
-RUN pip install --upgrade pip setuptools wheel && \
+# Copie UNIQUEMENT les manifestes de dépendances pour profiter du cache
+COPY requirements.txt ./requirements.txt
+
+# IMPORTANT : ne réinstalle PAS torch/torchaudio si déjà inclus/compatibles
+# dans l'image l4t-ml. Pinner précisément tes versions dans requirements.txt.
+RUN python3 -m pip install --upgrade pip setuptools wheel && \
     pip install -r requirements.txt
 
 # -----------------------------------------------------------------------------
-# STAGE 2: runtime - image finale propre
+# STAGE: runtime — image finale propre et plus légère
 # -----------------------------------------------------------------------------
 FROM base AS runtime
-
-# Création d’un user non-root (bonnes pratiques)
-RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 
-# Copie les deps python depuis le builder (couche partagée)
+# User non-root (bonnes pratiques)
+RUN useradd -ms /bin/bash appuser
+
+# Copie des libs Python du builder
+# (note: l'emplacement peut varier légèrement selon la version Python embarquée)
 COPY --from=builder /usr/local/lib/python*/dist-packages /usr/local/lib/python*/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copie ton code
+# Copie du code (adapte les chemins à ton repo)
+# Si tu utilises un package, tu peux aussi faire un `pip install -e .`
 COPY ./src ./src
 COPY ./asr_agent ./asr_agent
 COPY ./models ./models
 COPY ./config ./config
-# (ajuste à l’arbo de ton repo)
-COPY ./pyproject.toml ./setup.cfg ./setup.py* ./ 2>/dev/null || true
 COPY ./requirements.txt ./requirements.txt
-
-# (Optionnel) Installe en editable si tu as un package
+# Optionnel si tu as un package Python
+# COPY ./pyproject.toml ./setup.cfg ./setup.py* ./ 2>/dev/null || true
 # RUN pip install -e .
 
-# Santé/Runtime
+# Variables d'env runtime
 ENV PYTHONUNBUFFERED=1 \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    OMP_NUM_THREADS=1
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# (Optionnel) expose un port si tu lances une API FastAPI/Gradio
+# Port API (si tu exposes FastAPI/Gradio)
 EXPOSE 8000
 
-# (Optionnel) entrypoint robuste avec tini (gère les signaux)
+# Entrypoint robuste (gestion des signaux)
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Commande par défaut (à adapter)
+# Commande par défaut (adapte à ton lanceur)
+# Exemples :
+# CMD ["uvicorn", "asr_agent.api:app", "--host", "0.0.0.0", "--port", "8000"]
 CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
