@@ -2,7 +2,7 @@ name: Build & Push Docker (multi-arch)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
   # (optionnel) publie aussi quand tu crées un tag v*
   # tags:
   #   - "v*"
