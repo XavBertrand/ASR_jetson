@@ -1,0 +1,80 @@
+# -----------------------------------------------------------------------------
+# STAGE 0: base CUDA/cuDNN/TensorRT/PyTorch via L4T (Jetson)
+# Choisis UNE base selon ta version de JetPack installée sur l'Orin.
+#   - JetPack 6.x : nvcr.io/nvidia/l4t-ml:36.3.0-py3  (exemple tag)
+#   - JetPack 5.x : nvcr.io/nvidia/l4t-ml:r35.4.1-py3 (exemple tag)
+# Vérifie la compat exacte sur: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/l4t-ml
+# -----------------------------------------------------------------------------
+ARG L4T_TAG=36.3.0-py3
+FROM nvcr.io/nvidia/l4t-ml:${L4T_TAG} AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UVICORN_WORKERS=1 \
+    TZ=Etc/UTC
+
+# Outils système minimaux
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git wget curl ca-certificates tzdata tini \
+      libsndfile1 ffmpeg \
+      && rm -rf /var/lib/apt/lists/*
+
+# (Optionnel) Définis Python 3.X exact si fourni par l'image
+# RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+
+# -----------------------------------------------------------------------------
+# STAGE 1: builder - installe dépendances Python depuis requirements
+# NB: pas d’exec CUDA ici (le build GitHub tourne sous QEMU, sans GPU).
+# -----------------------------------------------------------------------------
+FROM base AS builder
+
+# Copie seulement les manifestes de deps pour profiter du cache Docker
+WORKDIR /app
+COPY requirements.txt requirements.txt
+
+# Recommandé: pinner torch/torchaudio/onnxruntime-gpu aux versions compatibles JetPack
+# (beaucoup d’images l4t-ml incluent déjà torch + torchaudio + tensorrt)
+# Si tu utilises du pur CPU sur Jetson, onnxruntime (arm64) peut suffire.
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# STAGE 2: runtime - image finale propre
+# -----------------------------------------------------------------------------
+FROM base AS runtime
+
+# Création d’un user non-root (bonnes pratiques)
+RUN useradd -ms /bin/bash appuser
+WORKDIR /app
+
+# Copie les deps python depuis le builder (couche partagée)
+COPY --from=builder /usr/local/lib/python*/dist-packages /usr/local/lib/python*/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copie ton code
+COPY ./src ./src
+COPY ./asr_agent ./asr_agent
+COPY ./models ./models
+COPY ./config ./config
+# (ajuste à l’arbo de ton repo)
+COPY ./pyproject.toml ./setup.cfg ./setup.py* ./ 2>/dev/null || true
+COPY ./requirements.txt ./requirements.txt
+
+# (Optionnel) Installe en editable si tu as un package
+# RUN pip install -e .
+
+# Santé/Runtime
+ENV PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    OMP_NUM_THREADS=1
+
+# (Optionnel) expose un port si tu lances une API FastAPI/Gradio
+EXPOSE 8000
+
+# (Optionnel) entrypoint robuste avec tini (gère les signaux)
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Commande par défaut (à adapter)
+CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
