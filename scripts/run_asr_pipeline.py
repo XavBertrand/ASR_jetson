@@ -27,5 +27,6 @@ def main():
     res = run_pipeline(args.audio, cfg)
     print(f"OK — JSON: {res.get('json')}  SRT: {res.get('srt')}")
 
+
 if __name__ == "__main__":
     main()
