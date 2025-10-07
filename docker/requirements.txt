@@ -23,9 +23,7 @@ braceexpand
 editdistance
 wget
 tensorboard
-torchaudio
 
 # ---- REMARQUE NEMO / TitaNet-S ----
 # nemo_toolkit[asr] est lourd & sensible aux versions sur Jetson.
-# Le Dockerfile expose WITH_NEMO=1 pour l’installer au build uniquement si tu le souhaites.
-# nemo_toolkit[asr]==2.4.0
+
