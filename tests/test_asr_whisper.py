@@ -5,6 +5,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+
 @pytest.mark.integration
 def test_asr_on_real_file_and_attach_speakers():
     # imports tardifs pour éviter d’échouer à la découverte des tests
