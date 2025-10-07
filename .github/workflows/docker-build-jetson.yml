@@ -3,6 +3,12 @@ name: Build & Push Docker (Jetson arm64)
 on:
   push:
     branches: [ "master" ]
+  workflow_dispatch:
+    inputs:
+      docker_tag:
+        description: 'Tag Docker Hub (optionnel, ex: v0.3.2). Laisser vide pour ignorer.'
+        required: false
+        default: ''
 
 jobs:
   build-and-push-arm64:
@@ -44,8 +50,12 @@ jobs:
         with:
           images: xbmtb82/asr_jetson
           tags: |
+            # latest seulement sur la branche par défaut (master chez toi si c'est la default)
             type=raw,value=latest,enable={{is_default_branch}}
+            # tag court basé sur le SHA du commit
             type=sha,format=short
+            # tag manuel via workflow_dispatch input (si non vide)
+            type=raw,value=${{ github.event.inputs.docker_tag }},enable=${{ github.event.inputs.docker_tag != '' }}
           labels: |
             org.opencontainers.image.title=ASR_jetson
             org.opencontainers.image.source=${{ github.repository }}
@@ -55,7 +65,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # ⚠️ si ton Dockerfile n'est pas à la racine, décommente :
+          # Si ton Dockerfile est ailleurs, décommente et ajuste :
           file: docker/Dockerfile.jetson
           platforms: linux/arm64
           push: true
