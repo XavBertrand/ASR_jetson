@@ -17,5 +17,5 @@ def load_faster_whisper(model_name: str = "tiny", device: str = "cuda", compute_
         raise RuntimeError(f"faster-whisper indisponible : {e}")
 
     device = "cuda" if device.startswith("cuda") and torch.cuda.is_available() != "" else "cpu"
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    model = WhisperModel(model_name, device=device, compute_type=compute_type, cpu_threads=4)
     return model, {"device": device, "compute_type": compute_type}

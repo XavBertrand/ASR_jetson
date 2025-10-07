@@ -40,6 +40,10 @@ It combines noise suppression, Voice Activity Detection (VAD), speaker diarizati
 ├── scripts/
 │   └──run_asr_pipeline.py # Wrapper for full pipeline execution
 │
+├── docker/
+│   ├── Dockerfile           # Multi arch (x86_64 and arm64) docker file
+│   └── requirements.txt     # python packages requirements
+│
 ├── src/
 │   ├── preprocessing/      # RNNoise wrapper
 │   ├── vad/                # Silero VAD integration
@@ -80,6 +84,64 @@ python -m venv .venv
 source .venv/bin/activate  # (Linux/Mac)
 .venv\Scripts\activate     # (Windows)
 pip install -r requirements.txt
+```
+
+## Build multi-arch Docker image
+
+### Linux / macOS / WSL (bash)
+
+#### Build local (amd64, image chargée en local pour test)
+```bash
+docker buildx build \
+  --builder asr-builder \
+  --platform linux/amd64 \
+  --build-arg TARGETARCH=amd64 \
+  --build-arg WITH_NEMO=1 \
+  -t xavier/asr-agent:dev \
+  -f docker/Dockerfile \
+  --load \
+  .
+```
+
+#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
+```bash
+docker buildx build \
+  --builder asr-builder \
+  --platform linux/amd64,linux/arm64 \
+  --build-arg WITH_NEMO=1 \
+  -t tonuser/asr-agent:latest \
+  -f docker/Dockerfile \
+  --push \
+  .
+```
+
+---
+
+### Windows (PowerShell)
+
+#### Build local (amd64, image chargée en local pour test)
+```powershell
+docker buildx build `
+  --builder asr-builder `
+  --platform linux/amd64 `
+  --build-arg TARGETARCH=amd64 `
+  --build-arg WITH_NEMO=1 `
+  -t xavier/asr-agent:dev `
+  -f docker/Dockerfile `
+  --load `
+  .
+```
+
+#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
+```powershell
+docker buildx build `
+  --builder asr-builder `
+  --platform linux/amd64,linux/arm64 `
+  --build-arg WITH_NEMO=1 `
+  -t tonuser/asr-agent:latest `
+  -f docker/Dockerfile `
+  --push `
+  .
 ```
 
 ---
