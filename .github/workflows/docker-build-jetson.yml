@@ -2,7 +2,7 @@ name: Build & Push Docker (Jetson arm64)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "master" ]
 
 jobs:
   build-and-push-arm64:
