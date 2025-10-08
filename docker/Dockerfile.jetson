@@ -58,7 +58,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --chown=appuser:appuser ./src ./src
 COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./scripts ./scripts
-COPY --chown=appuser:appuser ./docker/requirements.txt .
+# COPY --chown=appuser:appuser ./docker/requirements.txt .
 # COPY --chown=appuser:appuser ./tests ./tests
 # COPY asr_agent ./asr_agent
 # COPY config ./config
