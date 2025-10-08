@@ -31,7 +31,7 @@ WORKDIR /build
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
 # Copie UNIQUEMENT requirements.txt pour profiter du cache Docker
-COPY requirements.txt .
+COPY docker/requirements.txt .
 
 # Installation des dépendances
 # Note: torch/torchaudio sont déjà dans l4t-ml, évitez de les réinstaller
@@ -56,7 +56,7 @@ COPY --chown=appuser:appuser ./src ./src
 COPY --chown=appuser:appuser ./asr_agent ./asr_agent
 COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./config ./config
-COPY --chown=appuser:appuser ./requirements.txt .
+COPY --chown=appuser:appuser ./docker/requirements.txt .
 
 # Variables d'environnement runtime
 ENV NVIDIA_VISIBLE_DEVICES=all \
