@@ -28,14 +28,17 @@ FROM base AS builder
 WORKDIR /build
 
 # Upgrade pip dans une seule couche
-RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN python3 -m pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir uv
 
 # Copie UNIQUEMENT requirements.txt pour profiter du cache Docker
-COPY docker/requirements.txt .
+# COPY docker/requirements.txt .
+COPY pyproject.toml uv.lock* ./
 
 # Installation des dépendances
 # Note: torch/torchaudio sont déjà dans l4t-ml, évitez de les réinstaller
-RUN pip install --no-cache-dir -r requirements.txt
+# RUN pip install --no-cache-dir -r requirements.txt
+RUN uv sync --frozen --no-dev
 
 # -----------------------------------------------------------------------------
 # STAGE: runtime – image finale propre et optimisée

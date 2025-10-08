@@ -1,0 +1,3 @@
+runtime:
+  device: "cuda"
+  batch_size: 1

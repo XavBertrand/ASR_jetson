@@ -83,7 +83,7 @@ cd asr-pipeline
 python -m venv .venv
 source .venv/bin/activate  # (Linux/Mac)
 .venv\Scripts\activate     # (Windows)
-pip install -r requirements.txt
+uv sync --extra dev --extra media
 ```
 
 ## Build multi-arch Docker image
