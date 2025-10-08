@@ -7,73 +7,74 @@ name = "asr-jetson"
 version = "0.1.0"
 description = "Lightweight ASR Pipeline with Diarization for Jetson Orin Nano"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.12"
 license = {text = "MIT"}
-authors = [
-    {name = "Xavier Bertrand", email = "xavier.bertrand@example.com"}
-]
+authors = [{ name = "Xavier Bertrand", email = "xavier.bertrand@example.com" }]
 keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper", "nemo"]
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 
 dependencies = [
-    "numpy",
-    "scikit-learn",
-    "tqdm",
-    "pydub",
-    "soundfile",
-    "librosa==0.11.0",
-    "ffmpeg-python",
-    "faster-whisper",
-    "huggingface_hub",
-    "onnx>=1.14",
-    "jiwer<4",
-    "marshmallow",
-    "pyloudnorm",
-    "resampy",
-    "wrapt",
-    "braceexpand",
-    "editdistance",
-    "wget",
-    "tensorboard",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "pyyaml",
+  "numpy",
+  "scikit-learn",
+  "tqdm",
+  "pydub",
+  "soundfile",
+  "librosa==0.10.2.post1",
+  "ffmpeg-python",
+  "faster-whisper",
+  "huggingface_hub",
+  "onnx>=1.14",
+  "jiwer<4",
+  "marshmallow",
+  "pyloudnorm",
+  "resampy",
+  "wrapt",
+  "braceexpand",
+  "editdistance",
+  "wget",
+  "tensorboard",
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "pyyaml",
+  "torch==2.4.0+cu124",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "pytest-xdist>=3.3.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.5.0",
-    "pre-commit>=3.4.0",
+  "pytest>=7.4.0",
+  "pytest-cov>=4.1.0",
+  "pytest-xdist>=3.3.0",
+  "pytest-asyncio>=0.21.0",
+  "black>=23.0.0",
+  "ruff>=0.1.0",
+  "mypy>=1.5.0",
+  "pre-commit>=3.4.0",
 ]
 api = [
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "python-multipart>=0.0.6",
+  "fastapi>=0.104.0",
+  "uvicorn[standard]>=0.24.0",
+  "python-multipart>=0.0.6",
 ]
+# Installe Nemo uniquement sur Linux (Jetson compris)
 nemo = [
-    "nemo_toolkit[asr]",
+  "nemo_toolkit[asr]; platform_system == 'Linux'",
 ]
+# Installe TensorRT/PyCUDA seulement sur Jetson (Linux aarch64)
 tensorrt = [
-    "tensorrt",
-    "pycuda",
+  "tensorrt; platform_system == 'Linux' and platform_machine == 'aarch64'",
+  "pycuda; platform_system == 'Linux' and platform_machine == 'aarch64'",
 ]
+# PyAV : wheels Win vs Linux/mac
 media = [
-  "av>=15; platform_system != 'Windows'",
   "av<15; platform_system == 'Windows'",
+  "av>=15; platform_system != 'Windows'",
 ]
 
 [project.urls]
@@ -82,12 +83,15 @@ Repository = "https://github.com/XavBertrand/ASR_jetson"
 Issues = "https://github.com/XavBertrand/ASR_jetson/issues"
 
 [project.scripts]
-asr-pipeline = "src.pipeline.cli:main"
-asr-api = "src.api.main:start_server"
+# CLI unique du pipeline (pas d’API pour l’instant)
+asr-pipeline = "asr_jetson.pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+include = ["asr_jetson*"]
 exclude = ["tests*", "docs*", "scripts*"]
 
 [tool.pytest.ini_options]
@@ -97,31 +101,32 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
-    "-v",
-    "--strict-markers",
-    "--tb=short",
-    "--cov=src",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
+  "-v",
+  "--strict-markers",
+  "--tb=short",
+  "--cov=src/asr_jetson",
+  "--cov-report=term-missing",
+  "--cov-report=html",
+  "--cov-report=xml",
 ]
 markers = [
-    "integration: integration tests (slow, may require models)",
-    "unit: fast unit tests",
-    "gpu: tests requiring GPU",
-    "slow: slow tests (> 5 seconds)",
+  "integration: integration tests (slow, may require models)",
+  "unit: fast unit tests",
+  "gpu: tests requiring GPU",
+  "slow: slow tests (> 5 seconds)",
 ]
 filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::PendingDeprecationWarning",
+  "ignore::DeprecationWarning",
+  "ignore::PendingDeprecationWarning",
 ]
 
-[tool.uv]
-required-environments = ["win_amd64", "manylinux_2_28_aarch64", "macosx_11_0_x86_64", "macosx_14_0_arm64"]
+#[tool.uv]
+## aide la résolution multi-plateformes
+#required-environments = ["win_amd64", "manylinux_2_28_aarch64", "macosx_11_0_x86_64", "macosx_14_0_arm64"]
 
 [tool.black]
 line-length = 100
-target-version = ["py39", "py310", "py311"]
+target-version = ["py310", "py311"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -137,59 +142,37 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
-]
-ignore = [
-    "E501",  # line too long (handled by black)
-    "B008",  # do not perform function calls in argument defaults
-    "C901",  # too complex
-]
-exclude = [
-    ".git",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "build",
-    "dist",
-]
+target-version = "py310"
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008", "C901"]
+exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
-exclude = [
-    "tests/",
-    "build/",
-]
+exclude = ["tests/", "build/"]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src/asr_jetson"]
 omit = [
-    "*/tests/*",
-    "*/test_*.py",
-    "*/__pycache__/*",
-    "*/site-packages/*",
+  "*/tests/*",
+  "*/test_*.py",
+  "*/__pycache__/*",
+  "*/site-packages/*",
 ]
 
 [tool.coverage.report]
 exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
+  "pragma: no cover",
+  "def __repr__",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
 ]

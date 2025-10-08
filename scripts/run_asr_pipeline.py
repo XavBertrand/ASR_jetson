@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import argparse
 from pathlib import Path
-from src.pipeline.full_pipeline import PipelineConfig, run_pipeline
+from src.asr_jetson.pipeline.full_pipeline import PipelineConfig, run_pipeline
 
 def main():
     p = argparse.ArgumentParser()

@@ -8,16 +8,16 @@ from typing import List, Dict, Optional
 
 # === Imports de tes modules existants ===
 # Denoise
-from src.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
+from src.asr_jetson.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
 # VAD
 # Diarization
-from src.diarization.pipeline_diarization import apply_diarization
+from src.asr_jetson.diarization.pipeline_diarization import apply_diarization
 # ASR
-from src.asr.whisper_engine import load_faster_whisper
-from src.asr.transcribe import transcribe_segments, attach_speakers
+from src.asr_jetson.asr.whisper_engine import load_faster_whisper
+from src.asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
-from src.postprocessing.text_export import write_single_block_per_speaker_txt
-from src.postprocessing.llm_clean import clean_text_with_llm
+from src.asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt
+from src.asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 
 # --- Helpers ---
 def _ensure_parent(p: Path):

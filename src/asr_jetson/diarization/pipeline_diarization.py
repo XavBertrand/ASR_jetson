@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Literal
 
-from src.vad.vad import load_silero_vad, apply_vad
-from src.diarization.titanet import load_titanet, extract_embeddings
-from src.diarization.clustering import cluster_embeddings
+from src.asr_jetson.vad.silero import load_silero_vad, apply_vad
+from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings
+from src.asr_jetson.diarization.clustering import cluster_embeddings
 
 
 def apply_diarization(

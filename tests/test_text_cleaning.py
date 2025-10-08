@@ -1,9 +1,5 @@
-import io
 from pathlib import Path
-import shutil
-import os
 import sys
-import json
 import pytest
 
 # Si ton projet n'ajoute pas automatiquement la racine au PYTHONPATH :
@@ -12,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.postprocessing.llm_clean import clean_transcript_with_llm  # <-- adapte si nécessaire
+from src import clean_transcript_with_llm  # <-- adapte si nécessaire
 
 
 class FakeLLM:

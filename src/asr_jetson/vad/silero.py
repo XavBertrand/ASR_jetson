@@ -1,4 +1,4 @@
-# src/preprocessing/vad.py
+# src/preprocessing/silero.py
 
 import torch
 from pathlib import Path

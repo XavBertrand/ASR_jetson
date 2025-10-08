@@ -1,9 +1,8 @@
 # tests/test_text_export.py
 from __future__ import annotations
-import io
 import pathlib
 import sys
-from typing import List, Dict
+from typing import Dict
 
 # --- Rendez le paquet 'src' importable si vous lancez pytest depuis la racine du repo ---
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -11,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from src.postprocessing.text_export import (  # type: ignore
+from src import (  # type: ignore
     aggregate_text_per_speaker,
     write_single_block_per_speaker_txt,
     _clean_text,

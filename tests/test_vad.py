@@ -1,5 +1,5 @@
 import os
-from src.vad.vad import load_silero_vad, apply_vad
+from src import load_silero_vad, apply_vad
 
 from tests.conftest import PROJECT_ROOT
 
