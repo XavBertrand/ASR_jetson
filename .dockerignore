@@ -1,24 +1,65 @@
+# Git
 .git
-**/__pycache__/
-*.pyc
-*.pyo
-*.pyd
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
 *.so
-*.ipynb_checkpoints
-build/
+.Python
+*.egg-info/
 dist/
-.eggs/
-.env
-.env.*
-venv/
-.venv/
-.mypy_cache/
+build/
 .pytest_cache/
-**/.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs et données temporaires
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+!docker/Dockerfile.jetson
+
+# Données locales
 data/
 datasets/
-cache/
-logs/
-wandb/
-**/*.wav
-**/*.mp3
+*.wav
+*.mp3
+*.mp4
+
+# Modèles (si trop gros, à télécharger via script)
+# models/*.pth
+# models/*.bin

@@ -1,22 +1,16 @@
 # =============================================================================
-# Dockerfile Jetson (arm64) — ASR pipeline
+# Dockerfile Jetson (arm64) – ASR pipeline
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
-# JetPack 6.x : r36.x   |   JetPack 5.x : r35.x
-# Catalogue NGC : nvcr.io/nvidia/l4t-ml:<TAG>
 # =============================================================================
 
-# ------------ Choisir ta version JetPack ------------
-# JetPack 6.x (Orin, Ubuntu 22.04 sur JP6) :
 ARG L4T_TAG=r36.2.0-py3
-# JetPack 5.x (si nécessaire) :
-# ARG L4T_TAG=r35.4.1-py3
 
-# ------------ Base commune ------------
 FROM nvcr.io/nvidia/l4t-ml:${L4T_TAG} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
     TZ=Etc/UTC \
     OMP_NUM_THREADS=1
 
@@ -24,60 +18,63 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git wget curl ca-certificates tzdata tini \
       libsndfile1 ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # -----------------------------------------------------------------------------
-# STAGE: builder — installe uniquement les dépendances Python
-# (AUCUNE exécution CUDA/GPU ici : le build CI tourne sous QEMU arm64)
+# STAGE: builder – installe uniquement les dépendances Python
 # -----------------------------------------------------------------------------
 FROM base AS builder
-WORKDIR /app
+WORKDIR /build
 
-# Copie UNIQUEMENT les manifestes de dépendances pour profiter du cache
-COPY requirements.txt ./requirements.txt
+# Upgrade pip dans une seule couche
+RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# IMPORTANT : ne réinstalle PAS torch/torchaudio si déjà inclus/compatibles
-# dans l'image l4t-ml. Pinner précisément tes versions dans requirements.txt.
-RUN python3 -m pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt
+# Copie UNIQUEMENT requirements.txt pour profiter du cache Docker
+COPY requirements.txt .
+
+# Installation des dépendances
+# Note: torch/torchaudio sont déjà dans l4t-ml, évitez de les réinstaller
+RUN pip install --no-cache-dir -r requirements.txt
 
 # -----------------------------------------------------------------------------
-# STAGE: runtime — image finale propre et plus légère
+# STAGE: runtime – image finale propre et optimisée
 # -----------------------------------------------------------------------------
 FROM base AS runtime
 WORKDIR /app
 
-# User non-root (bonnes pratiques)
-RUN useradd -ms /bin/bash appuser
+# User non-root (sécurité)
+RUN useradd -u 1000 -ms /bin/bash appuser && \
+    chown -R appuser:appuser /app
 
 # Copie des libs Python du builder
-# (note: l'emplacement peut varier légèrement selon la version Python embarquée)
-COPY --from=builder /usr/local/lib/python*/dist-packages /usr/local/lib/python*/dist-packages
+COPY --from=builder /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copie du code (adapte les chemins à ton repo)
-# Si tu utilises un package, tu peux aussi faire un `pip install -e .`
-COPY ./src ./src
-COPY ./asr_agent ./asr_agent
-COPY ./models ./models
-COPY ./config ./config
-COPY ./requirements.txt ./requirements.txt
-# Optionnel si tu as un package Python
-# COPY ./pyproject.toml ./setup.cfg ./setup.py* ./ 2>/dev/null || true
-# RUN pip install -e .
+# Copie du code source
+COPY --chown=appuser:appuser ./src ./src
+COPY --chown=appuser:appuser ./asr_agent ./asr_agent
+COPY --chown=appuser:appuser ./models ./models
+COPY --chown=appuser:appuser ./config ./config
+COPY --chown=appuser:appuser ./requirements.txt .
 
-# Variables d'env runtime
-ENV PYTHONUNBUFFERED=1 \
-    NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+# Variables d'environnement runtime
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PYTHONPATH=/app:$PYTHONPATH
 
-# Port API (si tu exposes FastAPI/Gradio)
+# Switch vers user non-root
+USER appuser
+
+# Port API
 EXPOSE 8000
 
-# Entrypoint robuste (gestion des signaux)
+# Healthcheck (optionnel mais recommandé)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# Entrypoint avec tini pour gestion des signaux
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Commande par défaut (adapte à ton lanceur)
-# Exemples :
-# CMD ["uvicorn", "asr_agent.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Commande par défaut
 CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
