@@ -53,10 +53,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copie du code source
 COPY --chown=appuser:appuser ./src ./src
-COPY --chown=appuser:appuser ./asr_agent ./asr_agent
 COPY --chown=appuser:appuser ./models ./models
-COPY --chown=appuser:appuser ./config ./config
+COPY --chown=appuser:appuser ./scripts ./scripts
 COPY --chown=appuser:appuser ./docker/requirements.txt .
+COPY --chown=appuser:appuser ./tests ./tests
+# COPY asr_agent ./asr_agent
+# COPY config ./config
 
 # Variables d'environnement runtime
 ENV NVIDIA_VISIBLE_DEVICES=all \
@@ -77,4 +79,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
 # Commande par défaut
-CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
+# CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
+CMD ["uv", "run", "python", "src/pipeline/full_pipeline.py"]
