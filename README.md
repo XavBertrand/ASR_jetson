@@ -1,147 +1,76 @@
 # Lightweight ASR Pipeline with Diarization
 
-This repository provides a **lightweight, modular, and efficient Automatic Speech Recognition (ASR) pipeline** designed to run locally on both desktop GPUs and edge devices such as the **Jetson Orin Nano**.  
+This repository provides a **lightweight, modular, and efficient Automatic Speech Recognition (ASR) pipeline** designed to run locally on both desktop GPUs and edge devices such as the **Jetson Orin Nano**.
 It combines noise suppression, Voice Activity Detection (VAD), speaker diarization, and ASR transcription in a single, end-to-end workflow.
 
 ---
 
 ## ✨ Features
 
-- 🎧 **Noise suppression** with [RNNoise](https://github.com/xiph/rnnoise) to enhance speech quality.  
-- 🎙 **Voice Activity Detection (VAD)** using [Silero VAD](https://github.com/snakers4/silero-vad) for accurate speech segmentation.  
-- 👥 **Speaker diarization** with **TitaNet-S embeddings** and **spectral clustering**, enabling speaker-attributed transcriptions.  
-- 📝 **Automatic Speech Recognition (ASR)** using [FasterWhisper](https://github.com/SYSTRAN/faster-whisper) or **NVIDIA FastConformer** (via [NeMo](https://github.com/NVIDIA/NeMo)) for fast and accurate transcription.  
-- 📦 **Lightweight & modular**: optimized for local use, Jetson deployment, or integration into existing apps.  
-- 🧪 **Tested** with unit tests and integration tests (pytest).  
-
----
-
-## 🛠 Pipeline Overview
-
-1. **Noise Suppression**  
-   Input audio is denoised with RNNoise to reduce background noise.  
-
-2. **Voice Activity Detection (VAD)**  
-   Silero VAD splits audio into speech / non-speech regions.  
-
-3. **Speaker Embedding & Clustering**  
-   - Each speech segment is processed with **TitaNet-S** to extract speaker embeddings.  
-   - Segments are grouped using **spectral clustering** → speaker diarization.  
-
-4. **ASR Transcription**  
-   - Speech segments are transcribed using **FasterWhisper** (Whisper accelerated with CTranslate2) or **NeMo FastConformer**.  
-   - Output includes **timestamps, text, and speaker labels**.  
+* 🎧 **Noise suppression** with [RNNoise](https://github.com/xiph/rnnoise) to enhance speech quality.
+* 🎤 **Voice Activity Detection (VAD)** using [Silero VAD](https://github.com/snakers4/silero-vad) for accurate speech segmentation.
+* 👥 **Speaker diarization** with **TitaNet-S embeddings** and **spectral clustering**, enabling speaker-attributed transcriptions.
+* 📝 **Automatic Speech Recognition (ASR)** using [FasterWhisper](https://github.com/SYSTRAN/faster-whisper) or **NVIDIA FastConformer** (via [NeMo](https://github.com/NVIDIA/NeMo)).
+* ⚡ **Optimized for Jetson Orin Nano**: runs locally with CUDA/TensorRT acceleration.
+* 🧱 **uv + pyproject.toml** build system (no `requirements.txt` needed).
+* 🥪 Unit and integration tests with pytest.
 
 ---
 
 ## 📂 Repository Structure
 
 ```
-├── scripts/
-│   └──run_asr_pipeline.py # Wrapper for full pipeline execution
+ASR_jetson/
+├── src/
+│   └── asr_jetson/
+│       ├── preprocessing/        # RNNoise wrapper
+│       ├── vad/                  # Silero VAD integration
+│       ├── diarization/          # TitaNet-S embeddings + clustering
+│       ├── asr/                  # FasterWhisper / NeMo FastConformer
+│       ├── postprocessing/       # Text cleaning and formatting
+│       ├── pipeline/             # End-to-end pipeline orchestration (core + CLI)
+│       ├── io/                   # Audio I/O and storage utilities
+│       └── utils/                # Configs, helpers
+│
+├── configs/                      # (optional) runtime YAML configs
+│   ├── dev.yaml
+│   └── jetson.yaml
+│
+├── tests/                        # Unit & integration tests
+│   ├── test_pipeline.py
+│   └── data/
 │
 ├── docker/
-│   ├── Dockerfile           # Multi arch (x86_64 and arm64) docker file
-│   └── requirements.txt     # python packages requirements
+│   ├── Dockerfile                # Multi-arch (x86_64 + ARM64) build
+│   └── Dockerfile.jetson         # Jetson Orin Nano deployment
 │
-├── src/
-│   ├── preprocessing/      # RNNoise wrapper
-│   ├── vad/                # Silero VAD integration
-│   ├── diarization/        # TitaNet-S embeddings + clustering
-│   ├── asr/                # FasterWhisper / FastConformer ASR
-│   ├── postprocessing/     # Text export functions
-│   ├── pipeline/           # End-to-end pipeline orchestration
-│   └── utils/              # Helper functions
-│
-├── tests/                  # Unit & integration tests (pytest)
-│   ├── test_full_pipeline.py
-│   ├── ...
-│   └── data/               # Test audio files
-│
-├── models/                 # Some of the light AI models
-│   ├── nemo/               # TitaNet-S weights
-│   ├── rnnoise/            # RNNoise weigths
-│
-├── requirements.txt        # Dependencies
-├── README.md               # Project documentation
-
+├── pyproject.toml                # Dependencies, scripts, and settings
+├── uv.lock                       # uv dependency lock file
+└── README.md
 ```
 
 ---
 
-## 🚀 Installation
+## 🛠 Installation (with uv)
 
 ### Prerequisites
-- Python 3.9+
-- CUDA-enabled GPU (for faster inference, optional but recommended)
-- [ffmpeg](https://ffmpeg.org/) installed and in PATH
+
+* Python ≥ 3.10
+* CUDA-enabled GPU (recommended)
+* [ffmpeg](https://ffmpeg.org/) in PATH
+* [uv](https://github.com/astral-sh/uv) installed (`pip install uv`)
 
 ### Setup
+
 ```bash
-git clone https://github.com/yourusername/asr-pipeline.git
-cd asr-pipeline
-python -m venv .venv
-source .venv/bin/activate  # (Linux/Mac)
-.venv\Scripts\activate     # (Windows)
+git clone https://github.com/XavBertrand/ASR_jetson.git
+cd ASR_jetson
+
+# Create virtual environment and install dependencies
 uv sync --extra dev --extra media
-```
 
-## Build multi-arch Docker image
-
-### Linux / macOS / WSL (bash)
-
-#### Build local (amd64, image chargée en local pour test)
-```bash
-docker buildx build \
-  --builder asr-builder \
-  --platform linux/amd64 \
-  --build-arg TARGETARCH=amd64 \
-  --build-arg WITH_NEMO=1 \
-  -t xavier/asr-agent:dev \
-  -f docker/Dockerfile \
-  --load \
-  .
-```
-
-#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
-```bash
-docker buildx build \
-  --builder asr-builder \
-  --platform linux/amd64,linux/arm64 \
-  --build-arg WITH_NEMO=1 \
-  -t tonuser/asr-agent:latest \
-  -f docker/Dockerfile \
-  --push \
-  .
-```
-
----
-
-### Windows (PowerShell)
-
-#### Build local (amd64, image chargée en local pour test)
-```powershell
-docker buildx build `
-  --builder asr-builder `
-  --platform linux/amd64 `
-  --build-arg TARGETARCH=amd64 `
-  --build-arg WITH_NEMO=1 `
-  -t xavier/asr-agent:dev `
-  -f docker/Dockerfile `
-  --load `
-  .
-```
-
-#### Build multi-arch (amd64 + arm64, manifest poussé sur un registry)
-```powershell
-docker buildx build `
-  --builder asr-builder `
-  --platform linux/amd64,linux/arm64 `
-  --build-arg WITH_NEMO=1 `
-  -t tonuser/asr-agent:latest `
-  -f docker/Dockerfile `
-  --push `
-  .
+# (Optional) add GPU support on Windows
+uv add "torch==2.4.0+cu124" --extra-index-url https://download.pytorch.org/whl/cu124
 ```
 
 ---
@@ -149,16 +78,19 @@ docker buildx build `
 ## ▶️ Usage
 
 ### Run from CLI
+
 ```bash
-python -m src.pipeline --audio_file path/to/file.wav --output transcript.json
+uv run asr-pipeline --audio path/to/file.wav --out out/transcript.json
 ```
 
-### Run with Streamlit UI
+Or directly:
+
 ```bash
-streamlit run streamlit_app.py
+uv run python -m asr_jetson --audio path/to/file.wav
 ```
 
 ### Example Output
+
 ```json
 [
   {
@@ -178,35 +110,77 @@ streamlit run streamlit_app.py
 
 ---
 
+## 🐳 Docker
+
+### 🧹 Local / Desktop build (x86_64)
+
+```bash
+docker build -t asr-jetson:dev -f docker/Dockerfile .
+```
+
+### 🚀 Jetson Orin Nano build
+
+Uses NVIDIA’s `l4t-ml` base (includes CUDA + PyTorch).
+Make sure JetPack ≥ 6.0.
+
+```bash
+docker build -t asr-jetson:jetson -f docker/Dockerfile.jetson .
+```
+
+**Key points:**
+
+* No more `requirements.txt` — dependencies are installed via `uv sync` using `pyproject.toml`.
+* Torch is already included in `l4t-ml`.
+* Volumes can be mounted for I/O:
+
+  ```bash
+  docker run --gpus all -v $(pwd)/data:/data -v $(pwd)/models:/models -v $(pwd)/output:/output asr-jetson:jetson
+  ```
+
+### 🔱 Multi-arch build (x86_64 + ARM64)
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t xavbertrand/asr-jetson:latest \
+  -f docker/Dockerfile.jetson \
+  --push .
+```
+
+---
+
 ## ✅ Testing
 
-Integration tests ensure the pipeline works end-to-end.  
-
-Run all tests:
 ```bash
-pytest tests
+uv run pytest
+```
+
+To skip GPU tests on CPU:
+
+```bash
+pytest -m "not gpu"
 ```
 
 ---
 
 ## 📊 Benchmarks
 
-| Model              | Device              | 1h audio runtime |
-|--------------------|---------------------|------------------|
-| Whisper Large      | Desktop GPU (4070) | ~12 min          |
-| FasterWhisper-M    | Jetson Orin Nano    | ~25–30 min       |
-| FastConformer-CTC  | Jetson Orin Nano    | ~20–25 min       |
+| Model             | Device             | 1h audio runtime |
+| ----------------- | ------------------ | ---------------- |
+| Whisper Large     | Desktop GPU (4070) | ~12 min          |
+| FasterWhisper-M   | Jetson Orin Nano   | ~25–30 min       |
+| FastConformer-CTC | Jetson Orin Nano   | ~20–25 min       |
 
-*(Values are indicative and depend on audio quality & hardware setup)*
+*(Approximate values depending on model and precision settings)*
 
 ---
 
-## 📌 Roadmap
+## 🖊 Roadmap
 
-- [ ] Add support for **online streaming transcription**  
-- [ ] Extend diarization with **overlapping speech detection**  
-- [ ] Add **speaker adaptation** (personalized profiles)  
-- [ ] Docker container for **easy Jetson deployment**  
+* [ ] Add support for **online streaming transcription**
+* [ ] Integrate **FastAPI service** for remote inference
+* [ ] Add **speaker adaptation** (personalized profiles)
+* [ ] Extend diarization with **overlap detection**
 
 ---
 
@@ -218,8 +192,9 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
-- [Silero VAD](https://github.com/snakers4/silero-vad)  
-- [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)  
-- [TitaNet](https://arxiv.org/abs/2110.04410)  
-- [Whisper & FasterWhisper](https://github.com/openai/whisper)  
-- [RNNoise](https://github.com/xiph/rnnoise)  
+* [Silero VAD](https://github.com/snakers4/silero-vad)
+* [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)
+* [TitaNet](https://arxiv.org/abs/2110.04410)
+* [Whisper & FasterWhisper](https://github.com/openai/whisper)
+* [RNNoise](https://github.com/xiph/rnnoise)
+* [uv](https://github.com/astral-sh/uv)
