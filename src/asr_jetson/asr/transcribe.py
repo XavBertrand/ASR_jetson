@@ -4,73 +4,92 @@ from pathlib import Path
 from tqdm import tqdm
 from typing import List, Dict, Any, Iterable, Tuple
 
+
+
 def _sec(x_samples: int, sr: int = 16000) -> float:
     return x_samples / float(sr)
 
-def transcribe_segments(
-    model,
-    audio_path: str | Path,
-    vad_or_diar_segments: List[Dict[str, int]],
-    language: str = "fr",
-    beam_size: int = 5,
-    best_of: int = 5,
-    no_speech_threshold: float | None = None,
-) -> List[Dict[str, Any]]:
+
+# def transcribe_segments(model, wav_path, diar_segments, language=None):
+#     """
+#     Transcrit en s'appuyant sur les defaults stables de faster-whisper.
+#     Fenêtre audio par [start,end] pour réduire la charge côté encode().
+#     """
+#     results = []
+#     for seg in diar_segments:
+#         start = float(seg.get("start", 0.0))
+#         end = float(seg.get("end", 0.0))
+#         if end <= start or (end - start) < 0.05:
+#             continue
+#
+#         try:
+#             # Fenêtre : on passe bien la durée ciblée à faster-whisper
+#             segments, info = model.transcribe(
+#                 wav_path,
+#                 language=language,     # None = auto
+#                 task="transcribe",
+#                 vad_filter=False,      # VAD déjà faite en amont
+#                 chunk_length=15,       # petit chunk → moins de pression
+#                 word_timestamps=False,
+#             )
+#             text = "".join(s.text for s in segments)
+#         except SystemExit:
+#             print("[WARN] CTranslate2 aborted during encode(); empty text for this segment.")
+#             text = ""
+#         except Exception as e:
+#             print(f"[WARN] Whisper transcribe failed on [{start:.2f}, {end:.2f}]s: {e}")
+#             text = ""
+#
+#         results.append({**seg, "text": text})
+#
+#     return results
+
+def transcribe_full(model, wav_path, language=None):
     """
-    Transcrit uniquement les fenêtres [start:end] (échantillons 16 kHz) pour accélérer.
-    Retourne une liste de segments:
-      {start, end, start_s, end_s, text, words?}
+    Un seul passage ASR sur tout l'audio.
+    Retourne une liste de segments ASR: [{'start': float, 'end': float, 'text': str}, ...]
     """
-    from faster_whisper import decode_audio
-
-    audio_path = str(Path(audio_path))
-    # On charge *une fois* le waveform (mono, 16k recommandé en amont de ta pipeline)
-    samples = decode_audio(audio_path)  # float32, 16000 Hz si fichier déjà 16k (sinon faster-whisper resample)
-
-    out: List[Dict[str, Any]] = []
-    for _, seg in enumerate(tqdm(vad_or_diar_segments)):
-        s, e = int(seg["start"]), int(seg["end"])
-        if e <= s:
-            continue
-        chunk = samples[s:e]  # sous-signal
-
-        # Transcription chunkée (note: faster-whisper accepte des arrays numpy)
-        segments, _info = model.transcribe(
-            chunk,
-            language=language,
-            beam_size=beam_size,
-            best_of=best_of,
-            vad_filter=False,      # VAD déjà fait
-            no_speech_threshold=no_speech_threshold,
-            word_timestamps=True,  # pratique pour aligner les mots si voulu
-            task="transcribe",
-        )
-
-        # Concatène le texte de toutes les sous-parties du chunk
-        text_parts = []
-        words = []
-        for sub in segments:
-            if sub.text:
-                text_parts.append(sub.text.strip())
-            if sub.words:
-                # Ajuste les timestamps mots en relatif au chunk
-                for w in sub.words:
-                    words.append({
-                        "word": w.word,
-                        "start": s + int(round(w.start * 16000)),
-                        "end":   s + int(round(w.end * 16000)),
-                        "start_s": _sec(s) + float(w.start),
-                        "end_s":   _sec(s) + float(w.end),
-                    })
-
-        out.append({
-            "start": s, "end": e,
-            "start_s": _sec(s), "end_s": _sec(e),
-            "text": " ".join(text_parts).strip(),
-            "words": words,
-        })
-
+    segments, info = model.transcribe(
+        wav_path,
+        language=language,     # None = auto
+        task="transcribe",
+        vad_filter=False,      # on a déjà fait la VAD en amont
+        chunk_length=15,       # garde petit pour la stabilité WSL2 si besoin
+        word_timestamps=False,
+    )
+    out = []
+    for s in segments:
+        # s.start, s.end, s.text sont fournis par faster-whisper
+        out.append({"start": float(s.start), "end": float(s.end), "text": s.text})
     return out
+
+
+def text_by_diar_window(diar_segments, asr_segments):
+    """
+    Agrège le texte ASR par fenêtre de diarisation.
+    Pour chaque segment diar, concatène le texte des segments ASR qui chevauchent.
+    """
+    def overlap(a0, a1, b0, b1):
+        return max(0.0, min(a1, b1) - max(a0, b0))
+
+    results = []
+    for d in diar_segments:
+        d0, d1 = float(d["start"]), float(d["end"])
+        buf = []
+        for a in asr_segments:
+            if overlap(d0, d1, a["start"], a["end"]) > 0.0:
+                buf.append(a["text"])
+        results.append({**d, "text": " ".join(t for t in buf if t).strip()})
+    return results
+
+def transcribe_segments(model, wav_path, diar_segments, language=None):
+    """
+    Transcrit en s'appuyant sur les defaults stables de faster-whisper.
+    Fenêtre audio par [start,end] pour réduire la charge côté encode().
+    """
+    asr_segments = transcribe_full(model, wav_path, language=language)
+    diar_text = text_by_diar_window(diar_segments, asr_segments)
+    return diar_text
 
 def attach_speakers(
     diar_segments: List[Dict[str, Any]],

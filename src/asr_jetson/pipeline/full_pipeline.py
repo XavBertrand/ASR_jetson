@@ -49,18 +49,46 @@ def _write_srt(segments: List[Dict], path: Path):
 @dataclass
 class PipelineConfig:
     denoise: bool = True             # applique RNNoise/afftdn
-    device: str = "cuda"              # "cpu" | "cuda"
+    device: str = "cpu"              # "cpu" | "cuda"
     n_speakers: int = 2
     clustering_method: str = "spectral"      # "spectral" | "kmeans"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
     vad_min_chunk_s: float = 0.5
     whisper_model: str = "medium"      # tiny/base/small/...
-    whisper_compute: str = "int8"    # int8/int8_float16/float16/float32
-    language: Optional[str] = None   # None = auto
-    out_dir: Path = Path("outputs")  # où écrire JSON/SRT/WAV intermediaire
+    # Remarque : "int8" = OK CPU seulement ; sur CUDA -> "int8_float16" recommandé
+    whisper_compute: str = "int8"      # int8 / int8_float16 / float16 / float32
+    language: Optional[str] = None     # None = auto
+    out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
+
+def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
+    """
+    Adapte compute_type aux contraintes CTranslate2 :
+      - CPU : int8 / float32 ok
+      - CUDA : int8 N'EST PAS supporté -> utiliser int8_float16 (ou float16)
+    """
+    ct = (compute_type or "").lower()
+    if device == "cuda":
+        if ct in ("int8",):
+            return "int8_float16"
+        if ct in ("float32", "float16", "int8_float16"):
+            return ct
+        # fallback raisonnable sur GPU
+        return "float16"
+    else:
+        # CPU : int8/float32 (ou float16 si dispo AVX512fp16, mais inutile ici)
+        return ct or "int8"
+
 
 def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
+
+    # Évite des crashs CTranslate2 : harmonise compute_type selon le device
+    compute_type = _sanitize_whisper_compute(device, cfg.whisper_compute)
+
+    # (optionnel) limite threads CT2 pendant les tests CI pour la stabilité
+    os.environ.setdefault("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "1")
+    os.environ.setdefault("CT2_THREADS", "1")
+
     src_audio = Path(audio_path)
 
     # 0) (optionnel) Denoise -> wav propre
@@ -68,35 +96,42 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         denoised_wav = cfg.out_dir / "intermediate" / (src_audio.stem + "_denoised.wav")
         _ensure_parent(denoised_wav)
         try:
-            _apply_rnnoise(src_audio, denoised_wav, model_path=None)  # ton wrapper gère arnndn/afftdn fallback
+            _apply_rnnoise(src_audio, denoised_wav, model_path=None)
             wav_path = denoised_wav
         except Exception:
-            # en cas d’échec, on retombe sur l’input brut
             wav_path = src_audio
     else:
         wav_path = src_audio
 
-    # 1) Diarization (fait déjà : VAD (Silero) -> TitaNet -> clustering)
+    # 1) Diarization
     diar_segments = apply_diarization(
         wav_path,
         n_speakers=cfg.n_speakers,
         device=device,
         clustering_method=cfg.clustering_method,
-    )  # -> [{start,end,start_s,end_s,speaker}, ...]
+    )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
 
     # 2) ASR (faster-whisper)
     model, _meta = load_faster_whisper(
-        model_name=cfg.whisper_model, device=device, compute_type=cfg.whisper_compute
+        model_name=cfg.whisper_model,
+        device=device,
+        compute_type=compute_type,   # <-- utilise la valeur "safe"
     )
     asr_segments = transcribe_segments(
         model, wav_path, diar_segments, language=cfg.language
-    )  # -> [{start,end,text}, ...]
+    )
 
     # 3) Fusion (ASR + speaker par recouvrement temporel)
     labeled = attach_speakers(diar_segments, asr_segments)
     # labeled: [{start,end,text,speaker}, ...]
+
+    for seg in labeled:
+        if "start_s" not in seg:
+            seg["start_s"] = float(seg.get("start", 0.0))
+        if "end_s" not in seg:
+            seg["end_s"] = float(seg.get("end", 0.0))
 
     # 4) Exports
     _ensure_parent(cfg.out_dir / "json")
@@ -114,8 +149,8 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     # pour le SRT : array avec secondes & string speaker
     srt_payload = [
         {
-            "start": seg["start_s"],
-            "end": seg["end_s"],
+            "start": seg.get("start_s", seg.get("start", 0.0)),
+            "end": seg.get("end_s", seg.get("end", 0.0)),
             "speaker": f"SPK{seg.get('speaker', 0)}",
             "text": seg.get("text", ""),
         }

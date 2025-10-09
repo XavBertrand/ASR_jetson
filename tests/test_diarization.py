@@ -13,7 +13,7 @@ def test_diarization_on_real_file_integration():
     """
     # Import tardif pour laisser pytest découvrir le test même si nemo n'est pas installé
     try:
-        from src import apply_diarization
+        from src.asr_jetson.diarization.pipeline_diarization import apply_diarization
     except Exception as e:
         pytest.skip(f"Pipeline import failed (probable dépendance manquante) : {e}")
 

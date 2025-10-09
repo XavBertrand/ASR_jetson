@@ -1,7 +1,6 @@
 import os
-from src import load_silero_vad, apply_vad
-
-from tests.conftest import PROJECT_ROOT
+from src.asr_jetson.vad.silero import load_silero_vad, apply_vad
+from utils import PROJECT_ROOT
 
 
 def test_vad_on_real_file():

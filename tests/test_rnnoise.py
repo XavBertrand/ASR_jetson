@@ -3,7 +3,7 @@ import subprocess
 import pytest
 from src.asr_jetson.preprocessing.rnnoise import apply_rnnoise
 
-from tests.conftest import PROJECT_ROOT
+from utils import PROJECT_ROOT
 
 
 @pytest.mark.parametrize("filter_type", ["arnndn", "afftdn"])
@@ -11,6 +11,7 @@ def test_rnnoise_with_ogg(tmp_path: Path, filter_type: str):
     """
     Test RNNoise/Noise reduction wrapper with an OGG input.
     Tries arnndn first; if unavailable, falls back to afftdn.
+    +
     """
     # Paths
     input_file = tmp_path / "test.mp3"

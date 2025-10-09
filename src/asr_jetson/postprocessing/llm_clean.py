@@ -23,17 +23,33 @@ USER_INSTR = (
 
 def _basic_local_cleanup(text: str) -> str:
     """Fallback minimal si aucun LLM dispo (sécurise la pipeline)."""
-    # Espace/ponctuation simple
+    import re
+
+    # 1. Réduction basique des espaces
     s = re.sub(r"\s+", " ", text).strip()
+
+    # 2. Ponctuation : espace avant → retirer, espace après → forcer
     s = re.sub(r"\s+([,.;:!?])", r"\1", s)
     s = re.sub(r"([,;:!?])(?=\S)", r"\1 ", s)
+
+    # 3. Apostrophes typographiques
     s = s.replace(" '", " ’").replace("' ", "’ ").replace("'", "’")
-    # Début de phrase simple (prudence)
+
+    # 4. Majuscule en début de phrase
     s = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
-    # Remettre retours à la ligne avant chaque SPEAKER pour relire proprement
-    s = re.sub(r"\s*(SPEAKER_\d+:)", r"\n\1 ", s).strip()
+
+    # 5. SPEAKER tags sur nouvelle ligne + **un seul espace après**
+    s = re.sub(r"\s*(SPEAKER_\d+:)\s*", r"\n\1 ", s).strip()
+
+    # 6. Nettoyage des doublons de retours à la ligne
     s = re.sub(r"\n+", "\n", s)
+
+    # 7. Fin de ligne finale
+    if not s.endswith("\n"):
+        s += "\n"
+
     return s
+
 
 def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, text: str, timeout_s: int = 120) -> Optional[str]:
     """

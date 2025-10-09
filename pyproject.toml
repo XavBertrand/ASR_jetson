@@ -21,7 +21,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "numpy",
+  "numpy<2.0",
   "scikit-learn",
   "tqdm",
   "pydub",
@@ -29,7 +29,6 @@ dependencies = [
   "librosa==0.10.2.post1",
   "ffmpeg-python",
   "faster-whisper",
-  "huggingface_hub",
   "onnx>=1.14",
   "jiwer<4",
   "marshmallow",
@@ -43,6 +42,19 @@ dependencies = [
   "pydantic>=2.0.0",
   "pydantic-settings>=2.0.0",
   "pyyaml",
+  "huggingface_hub>=0.23.0,<0.24.0",
+  "transformers==4.41.2",
+  "ctranslate2>=4.4.0",
+  # --- PyTorch auto multi-arch (sans extras) ---
+  # Windows x86_64 CUDA 12.4
+  "torch==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  "torchaudio==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  # Linux x86_64 (WSL2 inclus) CUDA 12.4
+  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  # Jetson Linux aarch64 (cuDNN/CUDA fournis par JetPack ; pas de suffixe +cu124)
+  "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
+  "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
 ]
 
 [project.optional-dependencies]
@@ -61,23 +73,38 @@ api = [
   "uvicorn[standard]>=0.24.0",
   "python-multipart>=0.0.6",
 ]
-# Installe Nemo uniquement sur Linux (Jetson compris)
-nemo = [
-  "nemo_toolkit[asr]; platform_system == 'Linux'",
-]
 # Installe TensorRT/PyCUDA seulement sur Jetson (Linux aarch64)
 tensorrt = [
   "tensorrt; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "pycuda; platform_system == 'Linux' and platform_machine == 'aarch64'",
 ]
-# PyAV : wheels Win vs Linux/mac
+# PyAV : version compatible multi-plateformes
 media = [
-  "av<15; platform_system == 'Windows'",
-  "av>=15; platform_system != 'Windows'",
+  "av>=13,<15",
 ]
-# pytorch on windows, not needed on jetson
+
+# PyTorch pour Windows avec CUDA 12.4
 gpu-win = [
   "torch==2.4.0+cu124; platform_system == 'Windows'",
+  "torchaudio==2.4.0+cu124; platform_system == 'Windows'",
+]
+
+# PyTorch pour Linux x86_64 (WSL2, Desktop Linux) avec CUDA 12.4
+gpu-linux = [
+  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+]
+
+# PyTorch pour Jetson ARM64 (depuis PyTorch officiel ou NVIDIA)
+# Sur Jetson, PyTorch est généralement pré-installé ou installé via pip standard
+gpu-jetson = [
+  "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
+  "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
+]
+
+# NeMo ASR (Linux uniquement : desktop Linux, WSL2, Jetson)
+nemo = [
+  "nemo_toolkit[asr]>=1.21.0,<2.0; platform_system == 'Linux'",
 ]
 
 [project.urls]
@@ -86,7 +113,6 @@ Repository = "https://github.com/XavBertrand/ASR_jetson"
 Issues = "https://github.com/XavBertrand/ASR_jetson/issues"
 
 [project.scripts]
-# CLI unique du pipeline (pas d’API pour l’instant)
 asr-pipeline = "asr_jetson.pipeline.cli:main"
 
 [tool.setuptools]
@@ -122,10 +148,6 @@ filterwarnings = [
   "ignore::DeprecationWarning",
   "ignore::PendingDeprecationWarning",
 ]
-
-#[tool.uv]
-## aide la résolution multi-plateformes
-#required-environments = ["win_amd64", "manylinux_2_28_aarch64", "macosx_11_0_x86_64", "macosx_14_0_arm64"]
 
 [tool.black]
 line-length = 100
@@ -182,3 +204,9 @@ exclude_lines = [
 
 [tool.uv]
 extra-index-url = ["https://download.pytorch.org/whl/cu124"]
+override-dependencies = [
+  "huggingface-hub>=0.23.0,<0.24.0",
+]
+
+[tool.uv.extra-build-dependencies]
+youtokentome = ["Cython"]

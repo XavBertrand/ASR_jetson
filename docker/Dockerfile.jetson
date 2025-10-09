@@ -2,9 +2,7 @@
 # Dockerfile Jetson (arm64) – ASR pipeline
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
 # =============================================================================
-
 ARG L4T_TAG=r36.2.0-py3
-
 FROM nvcr.io/nvidia/l4t-ml:${L4T_TAG} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -14,73 +12,70 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     OMP_NUM_THREADS=1
 
-# Outils système minimaux + audio
+# Outils système + audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git wget curl ca-certificates tzdata tini \
+      git curl ca-certificates tzdata tini \
       libsndfile1 ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && rm -rf /var/lib/apt/lists/* && apt-get clean
 
 # -----------------------------------------------------------------------------
-# STAGE: builder – installe uniquement les dépendances Python
+# STAGE: builder – installe les dépendances Python dans le système
 # -----------------------------------------------------------------------------
 FROM base AS builder
 WORKDIR /build
 
-# Upgrade pip dans une seule couche
-RUN python3 -m pip install --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir uv
+# uv (gestionnaire)
+RUN python3 -m pip install --upgrade pip setuptools wheel && pip install --no-cache-dir uv
 
-# Copie UNIQUEMENT requirements.txt pour profiter du cache Docker
-# COPY docker/requirements.txt .
+# Copie des manifests (pas le code pour maximiser le cache)
 COPY pyproject.toml uv.lock* ./
 
-# Installation des dépendances
-# Note: torch/torchaudio sont déjà dans l4t-ml, évitez de les réinstaller
-# RUN pip install --no-cache-dir -r requirements.txt
-RUN uv sync --frozen --no-dev
+# IMPORTANT:
+#  - pas de --frozen (lock x86 incompatible ARM)
+#  - --system pour installer dans /usr/local/lib/python3*/dist-packages
+#  - --no-dev pour éviter les deps de test
+RUN uv sync --system --no-dev --refresh
+
+# Sanity check (optionnel mais utile à build-time)
+RUN python3 - <<'PY'
+import sys, nemo, transformers, huggingface_hub
+print("Python:", sys.executable)
+print("NeMo:", nemo.__version__)
+print("Transformers:", transformers.__version__)
+print("HF Hub:", huggingface_hub.__version__)
+PY
 
 # -----------------------------------------------------------------------------
-# STAGE: runtime – image finale propre et optimisée
+# STAGE: runtime – image finale
 # -----------------------------------------------------------------------------
 FROM base AS runtime
 WORKDIR /app
 
 # User non-root (sécurité)
-RUN useradd -u 1000 -ms /bin/bash appuser && \
-    chown -R appuser:appuser /app
+RUN useradd -u 1000 -ms /bin/bash appuser && chown -R appuser:appuser /app
 
-# Copie des libs Python du builder
-COPY --from=builder /usr/local/lib/python3*/dist-packages /usr/local/lib/python3*/dist-packages
+# Copie des libs Python installées en builder
+COPY --from=builder /usr/local/lib/python3.*/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copie du code source
+# Copie du code source (ajuste selon ton repo)
 COPY --chown=appuser:appuser ./src ./src
 COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./scripts ./scripts
-# COPY --chown=appuser:appuser ./docker/requirements.txt .
-# COPY --chown=appuser:appuser ./tests ./tests
-# COPY asr_agent ./asr_agent
-# COPY config ./config
 
-# Variables d'environnement runtime
+# Env runtime
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    PYTHONPATH=/app:$PYTHONPATH
+    PYTHONPATH=/app:$PYTHONPATH \
+    TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
 
-# Switch vers user non-root
 USER appuser
-
-# Port API
 EXPOSE 8000
 
-# Healthcheck (optionnel mais recommandé)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:8000/health || exit 1
+  CMD curl -fsS http://localhost:8000/health || exit 1
 
-# Entrypoint avec tini pour gestion des signaux
 ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Commande par défaut
-# CMD ["python", "-m", "asr_agent.app", "--config", "config/prod.yaml"]
-CMD ["uv", "run", "python", "src/pipeline/full_pipeline.py"]
+# Exemple de commande – adapte à ton entry script
+CMD ["python3", "src/pipeline/full_pipeline.py"]
