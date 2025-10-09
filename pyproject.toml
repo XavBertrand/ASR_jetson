@@ -21,7 +21,7 @@ classifiers = [
 ]
 
 dependencies = [
-  "numpy",
+  "numpy<2.0",
   "scikit-learn",
   "tqdm",
   "pydub",
@@ -29,7 +29,6 @@ dependencies = [
   "librosa==0.10.2.post1",
   "ffmpeg-python",
   "faster-whisper",
-  "huggingface_hub",
   "onnx>=1.14",
   "jiwer<4",
   "marshmallow",
@@ -43,6 +42,7 @@ dependencies = [
   "pydantic>=2.0.0",
   "pydantic-settings>=2.0.0",
   "pyyaml",
+  "huggingface_hub>=0.23.0,<0.25.0",
 ]
 
 [project.optional-dependencies]
@@ -61,10 +61,6 @@ api = [
   "uvicorn[standard]>=0.24.0",
   "python-multipart>=0.0.6",
 ]
-# Installe Nemo uniquement sur Linux (Jetson compris)
-nemo = [
-  "nemo_toolkit[asr]; platform_system == 'Linux'",
-]
 # Installe TensorRT/PyCUDA seulement sur Jetson (Linux aarch64)
 tensorrt = [
   "tensorrt; platform_system == 'Linux' and platform_machine == 'aarch64'",
@@ -72,12 +68,17 @@ tensorrt = [
 ]
 # PyAV : wheels Win vs Linux/mac
 media = [
-  "av<15; platform_system == 'Windows'",
-  "av>=15; platform_system != 'Windows'",
+  "av>=13,<15",  # Version compatible Windows, Linux x86_64 et ARM
 ]
 # pytorch on windows, not needed on jetson
 gpu-win = [
   "torch==2.4.0+cu124; platform_system == 'Windows'",
+  "torchaudio==2.4.0+cu124; platform_system == 'Windows'",
+]
+
+# NeMo ASR (Linux uniquement : desktop Linux, WSL2, Jetson)
+nemo = [
+  "nemo_toolkit[asr]>=1.21.0,<2.0",
 ]
 
 [project.urls]
@@ -182,3 +183,10 @@ exclude_lines = [
 
 [tool.uv]
 extra-index-url = ["https://download.pytorch.org/whl/cu124"]
+override-dependencies = [
+  "triton; sys_platform == 'linux'",
+  "huggingface-hub>=0.23.0",  # Force version récente pour ModelFilter
+]
+# Packages qui nécessitent Cython pour build
+[tool.uv.extra-build-dependencies]
+youtokentome = ["Cython"]
