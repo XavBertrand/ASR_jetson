@@ -8,6 +8,9 @@ import time
 import requests
 from typing import Optional
 
+os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
+os.environ["LLM_MODEL"] = "qwen2.5-1.5b-instruct"
+
 SYS_PROMPT = (
     "Tu es un assistant de post-édition pour de la transcription française. "
     "Règles: 1) Corrige orthographe, grammaire, accords, ponctuation française (espaces fines avant ; : ! ? facultatives, mais espace normal OK), "

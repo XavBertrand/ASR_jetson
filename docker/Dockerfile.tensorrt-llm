@@ -1,0 +1,68 @@
+# =============================================================================
+# Dockerfile TensorRT-LLM Server pour Jetson (Qwen 2.5 1.5B)
+# Base : Image NVIDIA TensorRT-LLM optimisée pour Jetson
+# =============================================================================
+ARG JETPACK_VERSION=r36.2.0
+FROM nvcr.io/nvidia/l4t-tensorrt:${JETPACK_VERSION} AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    TRT_LLM_VERSION=0.13.0
+
+# Dépendances système
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip \
+      python3-dev \
+      git \
+      wget \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# Installation de TensorRT-LLM
+# -----------------------------------------------------------------------------
+WORKDIR /app
+
+# Clone TensorRT-LLM (version compatible Jetson)
+RUN git clone --depth 1 --branch v${TRT_LLM_VERSION} \
+    https://github.com/NVIDIA/TensorRT-LLM.git tensorrt_llm
+
+# Installation des dépendances Python
+RUN cd tensorrt_llm && \
+    pip3 install --no-cache-dir -r requirements.txt && \
+    pip3 install --no-cache-dir \
+      transformers>=4.38.0 \
+      accelerate \
+      sentencepiece \
+      fastapi \
+      uvicorn[standard] \
+      pydantic
+
+# -----------------------------------------------------------------------------
+# Serveur API OpenAI-compatible
+# -----------------------------------------------------------------------------
+COPY scripts/trtllm_server.py /app/trtllm_server.py
+COPY scripts/build_qwen_trt_engine.sh /app/build_engine.sh
+RUN chmod +x /app/build_engine.sh
+
+# Répertoires pour les modèles
+RUN mkdir -p /workspace/trt_engines /workspace/checkpoints
+
+# Variables d'environnement
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    PYTHONPATH=/app/tensorrt_llm:$PYTHONPATH \
+    ENGINE_DIR=/workspace/trt_engines/qwen2.5-1.5b
+
+EXPOSE 8000
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD curl -f http://localhost:8000/health || exit 1
+
+# Commande par défaut : lance le serveur TensorRT-LLM
+CMD ["python3", "/app/trtllm_server.py", \
+     "--engine_dir", "/workspace/trt_engines/qwen2.5-1.5b", \
+     "--tokenizer", "Qwen/Qwen2.5-1.5B-Instruct", \
+     "--host", "0.0.0.0", \
+     "--port", "8000"]
