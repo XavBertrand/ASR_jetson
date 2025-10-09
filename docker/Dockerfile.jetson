@@ -1,5 +1,5 @@
 # =============================================================================
-# Dockerfile Jetson (arm64) – ASR pipeline
+# Dockerfile Jetson (arm64) — ASR pipeline
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
 # =============================================================================
 ARG L4T_TAG=r36.2.0-py3
@@ -14,68 +14,97 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Outils système + audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates tzdata tini \
-      libsndfile1 ffmpeg \
-    && rm -rf /var/lib/apt/lists/* && apt-get clean
+      git \
+      curl \
+      ca-certificates \
+      tzdata \
+      tini \
+      libsndfile1 \
+      ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # -----------------------------------------------------------------------------
-# STAGE: builder – installe les dépendances Python dans le système
+# STAGE: builder — création du venv et installation des dépendances
 # -----------------------------------------------------------------------------
 FROM base AS builder
 WORKDIR /build
 
-# uv (gestionnaire)
-RUN python3 -m pip install --upgrade pip setuptools wheel && pip install --no-cache-dir uv
+# Installation de uv (gestionnaire de packages moderne)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:$PATH"
 
-# Copie des manifests (pas le code pour maximiser le cache)
-COPY pyproject.toml uv.lock* ./
+# Création du venv dans /opt/venv
+RUN uv venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
+    VIRTUAL_ENV="/opt/venv"
 
-# IMPORTANT:
-#  - pas de --frozen (lock x86 incompatible ARM)
-#  - --system pour installer dans /usr/local/lib/python3*/dist-packages
-#  - --no-dev pour éviter les deps de test
-RUN uv sync --system --no-dev --refresh
+# Copie uniquement pyproject.toml pour maximiser le cache Docker
+COPY pyproject.toml ./
 
-# Sanity check (optionnel mais utile à build-time)
-RUN python3 - <<'PY'
-import sys, nemo, transformers, huggingface_hub
-print("Python:", sys.executable)
-print("NeMo:", nemo.__version__)
-print("Transformers:", transformers.__version__)
-print("HF Hub:", huggingface_hub.__version__)
-PY
+# Installation des dépendances
+# - media: PyAV pour traitement audio/vidéo
+# - tensorrt: TensorRT et PyCUDA (Jetson uniquement)
+# - nemo: NeMo ASR toolkit
+RUN uv pip install --no-cache \
+    -e ".[media,tensorrt,nemo]" \
+    && uv pip list
+
+# Vérification de l'installation (échoue le build si problème)
+RUN python3 -c "import sys; print('Python:', sys.version)" && \
+    python3 -c "import torch; print('PyTorch:', torch.__version__, '| CUDA:', torch.cuda.is_available())" && \
+    python3 -c "import nemo; print('NeMo:', nemo.__version__)" && \
+    python3 -c "import transformers; print('Transformers:', transformers.__version__)" && \
+    python3 -c "import huggingface_hub; print('HF Hub:', huggingface_hub.__version__)"
 
 # -----------------------------------------------------------------------------
-# STAGE: runtime – image finale
+# STAGE: runtime — image finale optimisée
 # -----------------------------------------------------------------------------
 FROM base AS runtime
 WORKDIR /app
 
-# User non-root (sécurité)
-RUN useradd -u 1000 -ms /bin/bash appuser && chown -R appuser:appuser /app
+# Création utilisateur non-root pour la sécurité
+RUN useradd -u 1000 -ms /bin/bash appuser && \
+    chown -R appuser:appuser /app
 
-# Copie des libs Python installées en builder
-COPY --from=builder /usr/local/lib/python3.*/dist-packages /usr/local/lib/python3.10/dist-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Copie du venv complet depuis le builder
+COPY --from=builder /opt/venv /opt/venv
 
-# Copie du code source (ajuste selon ton repo)
+# Configuration PATH pour utiliser le venv
+ENV PATH="/opt/venv/bin:$PATH" \
+    VIRTUAL_ENV="/opt/venv"
+
+# Copie du code source de l'application
 COPY --chown=appuser:appuser ./src ./src
 COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./scripts ./scripts
+COPY --chown=appuser:appuser pyproject.toml ./
 
-# Env runtime
+# Variables d'environnement runtime
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
-    PYTHONPATH=/app:$PYTHONPATH \
+    PYTHONPATH=/app \
     TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
-    HF_HUB_DISABLE_TELEMETRY=1
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HOME=/app/.cache/huggingface \
+    TORCH_HOME=/app/.cache/torch
 
+# Création des répertoires de cache
+RUN mkdir -p /app/.cache/huggingface /app/.cache/torch && \
+    chown -R appuser:appuser /app/.cache
+
+# Passage en utilisateur non-root
 USER appuser
+
+# Port exposé (si vous avez une API)
 EXPOSE 8000
 
+# Health check pour orchestration (Kubernetes, Docker Swarm, etc.)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
+# Tini comme PID 1 pour gérer proprement les signaux
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# Exemple de commande – adapte à ton entry script
+
+# Commande par défaut — à adapter selon votre point d'entrée
 CMD ["python3", "src/pipeline/full_pipeline.py"]

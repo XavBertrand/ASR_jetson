@@ -3,63 +3,66 @@
 .gitignore
 .gitattributes
 
-# CI/CD
-.github
-.gitlab-ci.yml
-
-# Documentation
-*.md
-docs/
-LICENSE
-
 # Python
 __pycache__
 *.py[cod]
 *$py.class
 *.so
 .Python
-*.egg-info/
-dist/
-build/
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+
+# uv
+uv.lock
+.uv/
+
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
-.venv/
-venv/
-env/
+*.cover
 
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Logs et données temporaires
-*.log
-logs/
-tmp/
-temp/
-*.tmp
+# Documentation
+docs/
+*.md
+!README.md
 
-# Tests
-tests/
-test_*.py
-*_test.py
+# CI/CD
+.github/
+.gitlab-ci.yml
 
 # Docker
-docker-compose*.yml
 Dockerfile*
-!docker/Dockerfile.jetson
+docker-compose*.yml
+.dockerignore
 
-# Données locales
-data/
-datasets/
-*.wav
-*.mp3
-*.mp4
+# Logs et cache
+*.log
+.cache/
+logs/
 
-# Modèles (si trop gros, à télécharger via script)
-# models/*.pth
-# models/*.bin
+# Données et modèles (à ajuster selon vos besoins)
+# Décommentez si vous ne voulez pas inclure les modèles dans l'image
+# models/
+# data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
