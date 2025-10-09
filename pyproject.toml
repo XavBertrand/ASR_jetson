@@ -43,7 +43,6 @@ dependencies = [
   "pydantic>=2.0.0",
   "pydantic-settings>=2.0.0",
   "pyyaml",
-  "torch==2.4.0+cu124",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +74,10 @@ tensorrt = [
 media = [
   "av<15; platform_system == 'Windows'",
   "av>=15; platform_system != 'Windows'",
+]
+# pytorch on windows, not needed on jetson
+gpu-win = [
+  "torch==2.4.0+cu124; platform_system == 'Windows'",
 ]
 
 [project.urls]
@@ -176,3 +179,6 @@ exclude_lines = [
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
 ]
+
+[tool.uv]
+extra-index-url = ["https://download.pytorch.org/whl/cu124"]
