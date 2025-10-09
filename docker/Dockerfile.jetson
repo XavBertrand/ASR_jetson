@@ -37,16 +37,16 @@ RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
 
-# Copie uniquement pyproject.toml pour maximiser le cache Docker
-COPY pyproject.toml ./
+# Copie des fichiers nécessaires pour l'installation du package
+COPY pyproject.toml README.md ./
+COPY ./src ./src
 
-# Installation des dépendances
+# Installation des dépendances + package en mode éditable
 # - media: PyAV pour traitement audio/vidéo
 # - tensorrt: TensorRT et PyCUDA (Jetson uniquement)
 # - nemo: NeMo ASR toolkit
 RUN uv pip install --no-cache \
-    -e ".[media,tensorrt,nemo]" \
-    && uv pip list
+    -e ".[media,tensorrt,nemo]"
 
 # Vérification de l'installation (échoue le build si problème)
 RUN python3 -c "import sys; print('Python:', sys.version)" && \
@@ -68,15 +68,17 @@ RUN useradd -u 1000 -ms /bin/bash appuser && \
 # Copie du venv complet depuis le builder
 COPY --from=builder /opt/venv /opt/venv
 
+# Copie du code source (nécessaire car installé en mode éditable -e)
+COPY --from=builder /build/src ./src
+COPY --from=builder /build/pyproject.toml /build/README.md ./
+
+# Copie des autres fichiers de l'application
+COPY --chown=appuser:appuser ./models ./models
+COPY --chown=appuser:appuser ./scripts ./scripts
+
 # Configuration PATH pour utiliser le venv
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
-
-# Copie du code source de l'application
-COPY --chown=appuser:appuser ./src ./src
-COPY --chown=appuser:appuser ./models ./models
-COPY --chown=appuser:appuser ./scripts ./scripts
-COPY --chown=appuser:appuser pyproject.toml ./
 
 # Variables d'environnement runtime
 ENV NVIDIA_VISIBLE_DEVICES=all \
