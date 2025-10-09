@@ -34,8 +34,8 @@ def test_full_pipeline_end_to_end(tmp_path):
         clustering_method="spectral",
         spectral_assign_labels="kmeans",
         vad_min_chunk_s=0.5,
-        whisper_model="tiny",
-        whisper_compute="float16",  # <--- clé : compatible CUDA
+        whisper_model="medium",
+        whisper_compute="int8_float16",  # <--- clé : compatible CUDA
         language=None,
         out_dir=out_dir,
     )

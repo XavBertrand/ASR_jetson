@@ -23,7 +23,7 @@ def load_faster_whisper(model_name: str, device: str, compute_type: str):
             model_name,
             device=device,
             compute_type=compute_type,
-            num_workers=1,   # limite le parallélisme interne
+            num_workers=2,   # limite le parallélisme interne
         )
         meta = {"model": model_name, "device": device, "compute_type": compute_type}
         return model, meta

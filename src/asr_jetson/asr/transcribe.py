@@ -54,7 +54,7 @@ def transcribe_full(model, wav_path, language=None):
         language=language,     # None = auto
         task="transcribe",
         vad_filter=False,      # on a déjà fait la VAD en amont
-        chunk_length=15,       # garde petit pour la stabilité WSL2 si besoin
+        chunk_length=40,       # garde petit pour la stabilité WSL2 si besoin
         word_timestamps=False,
     )
     out = []
