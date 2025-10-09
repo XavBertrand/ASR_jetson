@@ -12,17 +12,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     OMP_NUM_THREADS=1
 
-# Outils système + audio
+# L4T-ML contient déjà la plupart des outils nécessaires
+# On installe uniquement ce qui manque vraiment
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git \
       curl \
-      ca-certificates \
-      tzdata \
       tini \
-      libsndfile1 \
-      ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean || true
 
 # -----------------------------------------------------------------------------
 # STAGE: builder — création du venv et installation des dépendances
@@ -32,7 +28,9 @@ WORKDIR /build
 
 # Installation de uv (gestionnaire de packages moderne)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+
+# Mise à jour du PATH pour inclure uv
+ENV PATH="/root/.local/bin:$PATH"
 
 # Création du venv dans /opt/venv
 RUN uv venv /opt/venv
