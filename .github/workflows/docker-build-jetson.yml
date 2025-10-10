@@ -3,37 +3,28 @@ name: Build & Push Docker (Jetson arm64)
 on:
   push:
     branches: [ "master" ]
-    paths:
-      - "docker/**"
-      - "docker/Dockerfile*"
-      - ".github/workflows/docker-build-jetson.yml"
-      - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
       docker_tag:
-        description: "Tag Docker Hub optionnel (ex: v0.3.2)"
+        description: 'Tag Docker Hub optionnel (ex: v0.3.2)'
         required: false
-        default: ""
+        default: ''
 
 concurrency:
   group: build-jetson-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  packages: read
-
 jobs:
   build-and-push-arm64:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       # Libère massivement AVANT le build (clé contre "No space left on device")
       - name: Maximize build space
@@ -50,14 +41,19 @@ jobs:
       # Nettoyage complémentaire + fix de la typo android
       - name: Free disk space (aggressive)
         run: |
-          echo "Espace avant nettoyage:" && df -h
+          echo "Espace avant nettoyage:"
+          df -h
+          
+          # Suppression manuelle des gros dossiers
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
-          docker system prune -af --volumes || true
-          echo "Espace après nettoyage:" && df -h
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"          
+          # Nettoyage Docker
+          docker system prune -af --volumes
+          echo "Espace après nettoyage:"
+          df -h
 
       - name: Set up QEMU (arm64)
         uses: docker/setup-qemu-action@v3
@@ -65,12 +61,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          install: true
           driver-opts: |
             image=moby/buildkit:latest
             network=host
 
-      # ✅ Login NGC conservé (clé indispensable pour tirer nvcr.io)
       - name: Login to NGC
         uses: docker/login-action@v3
         with:
