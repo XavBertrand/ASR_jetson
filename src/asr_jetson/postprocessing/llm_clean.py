@@ -20,8 +20,14 @@ SYS_PROMPT = (
 )
 
 USER_INSTR = (
-    "Voici un texte de transcription avec des blocs par locuteur.\n"
-    "Corrige-le selon les règles. Retourne UNIQUEMENT le texte corrigé, même format (lignes commençant par 'SPEAKER_X: ')."
+    "Voici un texte de transcription en français, avec des blocs par locuteur (lignes commençant par 'SPEAKER_X: ').\n"
+    "Corrige uniquement les fautes d’orthographe, de grammaire et de ponctuation.\n"
+    "⚠️ Garde TOUS les mots et phrases du texte original (aucune suppression, reformulation ou résumé).\n"
+    "⚠️ Ne commente pas, n’explique pas, ne résume pas, ne fais pas d’analyse.\n"
+    "⚠️ Retourne UNIQUEMENT le texte corrigé, au même format, sans texte avant ni après.\n"
+    "Exemple :\n"
+    "Entrée → 'SPEAKER_1: bonjour je suis alle a la plage'\n"
+    "Sortie → 'SPEAKER_1: Bonjour, je suis allé à la plage.'\n"
 )
 
 def _basic_local_cleanup(text: str) -> str:
@@ -69,8 +75,10 @@ def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, t
             {"role": "system", "content": SYS_PROMPT},
             {"role": "user", "content": USER_INSTR + "\n\n" + text},
         ],
-        "temperature": 0.1,
-        "max_tokens": max(512, min(4096, len(text.split()) * 2)),
+        # "temperature": 0.1,
+        # "max_tokens": max(512, min(4096, len(text.split()) * 2)),
+        "temperature": 0.0,
+        "max_tokens": len(text.split()) * 3,
         "stream": False,
     }
     r = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
