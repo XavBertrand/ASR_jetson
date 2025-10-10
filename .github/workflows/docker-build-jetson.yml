@@ -5,7 +5,7 @@ on:
     branches: [ "master" ]
     paths:
       - "docker/**"
-      - "Dockerfile*"
+      - "docker/Dockerfile*"
       - ".github/workflows/docker-build-jetson.yml"
       - "pyproject.toml"
       - "uv.lock"
@@ -99,7 +99,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: docker/Dockerfile.jetson
+          file: ./docker/Dockerfile.jetson
           platforms: linux/arm64
           push: true
           load: false
