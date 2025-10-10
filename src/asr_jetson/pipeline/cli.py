@@ -24,7 +24,7 @@ def main():
         out_dir=Path(args.out_dir),
     )
     result = run_pipeline(args.audio, cfg)
-    print("✓ pipeline done\nJSON:", result.get("json"), "\nSRT:", result.get("srt"))
+    print("✓ pipeline done\nJSON:", result.get("json"), "\nSRT:", result.get("srt"), "\nTXT:", result.get("txt"), "\nTXT CLEANED:", result.get("txt_llm"))
 
 if __name__ == "__main__":
     main()

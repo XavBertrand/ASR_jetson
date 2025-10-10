@@ -137,7 +137,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     _ensure_parent(cfg.out_dir / "json")
     _ensure_parent(cfg.out_dir / "srt")
 
-    root_dir = Path(__file__).resolve().parents[2]
+    root_dir = Path(__file__).resolve().parents[3]
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "json"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
@@ -211,4 +211,6 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         "labeled": labeled,
         "json": str(out_json),
         "srt": str(out_srt),
+        "txt": str(out_txt),
+        "txt_llm": str(out_txt_clean),
     }
