@@ -12,22 +12,34 @@ os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
 os.environ["LLM_MODEL"] = "qwen2.5-1.5b-instruct"
 
 SYS_PROMPT = (
-    "Tu es un assistant de post-édition pour de la transcription française. "
+    "Tu es un correcteur automatique de transcription française. "
     "Règles: 1) Corrige orthographe, grammaire, accords, ponctuation française (espaces fines avant ; : ! ? facultatives, mais espace normal OK), "
     "2) Garde le sens AU PLUS PROCHE possible, 3) Ne SUPPRIME pas d'information sémantique, "
     "4) Ne réinvente rien, 5) Conserve la structure et les tags de locuteur 'SPEAKER_X:' "
     "6) Fusionne les micro-bégaiements évidents, 7) Ne change pas les numéros de SPEAKER."
+    "8) Tu n’écris JA%AIS de commentaires ni d’analyses. "
+    "9) Tu produis UNIQUEMENT le texte corrigé, sans aucun ajout ni retrait. "
+    "10) Ton rôle est mécanique, comme un correcteur orthographique humain discipliné."
 )
 
 USER_INSTR = (
-    "Voici un texte de transcription en français, avec des blocs par locuteur (lignes commençant par 'SPEAKER_X: ').\n"
-    "Corrige uniquement les fautes d’orthographe, de grammaire et de ponctuation.\n"
-    "⚠️ Garde TOUS les mots et phrases du texte original (aucune suppression, reformulation ou résumé).\n"
-    "⚠️ Ne commente pas, n’explique pas, ne résume pas, ne fais pas d’analyse.\n"
-    "⚠️ Retourne UNIQUEMENT le texte corrigé, au même format, sans texte avant ni après.\n"
-    "Exemple :\n"
-    "Entrée → 'SPEAKER_1: bonjour je suis alle a la plage'\n"
-    "Sortie → 'SPEAKER_1: Bonjour, je suis allé à la plage.'\n"
+    "IMPORTANT : Ce qui suit N'EST PAS une analyse, pas un résumé, pas une reformulation.\n"
+    "Tu n'es PAS critique littéraire, tu es un correcteur automatique.\n"
+    "TA SEULE MISSION : corriger les fautes d’orthographe, de grammaire et de ponctuation du texte donné, "
+    "sans rien changer d’autre.\n"
+    "Règles obligatoires :\n"
+    "1️) Ne supprime RIEN.\n"
+    "2️) Ne résume RIEN.\n"
+    "3️) Ne commente RIEN.\n"
+    "4️) Ne réécris PAS le style.\n"
+    "5️) Ne traduis PAS.\n"
+    "6️) Tu dois garder le même format exact que le texte d’entrée : mêmes lignes, mêmes préfixes 'SPEAKER_X:'.\n"
+    "7️) Si tu sors autre chose que le texte corrigé, la sortie sera REJETÉE.\n"
+    "Format attendu (exemple) :\n"
+    "Entrée : SPEAKER_1: bonjour je suis alle a la plage\n"
+    "Sortie : SPEAKER_1: Bonjour, je suis allé à la plage.\n"
+    "\n"
+    "Voici le texte à corriger (ne réponds QUE par la version corrigée, sans introduction, sans explication) :\n"
 )
 
 def _basic_local_cleanup(text: str) -> str:
