@@ -26,19 +26,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Libère massivement AVANT le build (clé contre "No space left on device")
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 512
-          swap-size-mb: 1024
-          remove-dotnet: true
-          remove-android: true
-          remove-haskell: true
-          remove-codeql: true
-          remove-docker-images: true
+      - name: Move Docker data-root to large workspace volume
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-      # Nettoyage complémentaire + fix de la typo android
+          # Arrêter Docker (selon l'image runner)
+          sudo systemctl stop docker || sudo service docker stop || true
+
+          # Utiliser le volume du workspace (large partition)
+          NEW_ROOT="/home/runner/work/_docker"
+          sudo mkdir -p "${NEW_ROOT}"
+          sudo chown -R root:root "${NEW_ROOT}"
+
+          # Migrer l'existant si présent (best effort, ne casse pas si vide)
+          if [ -d /var/lib/docker ]; then
+            sudo rsync -aHAXx /var/lib/docker/ "${NEW_ROOT}/" || true
+          fi
+
+          # Pointer Docker vers le nouveau data-root
+          echo '{"data-root":"'"${NEW_ROOT}"'"}' | sudo tee /etc/docker/daemon.json
+
+          # Redémarrer Docker
+          sudo systemctl start docker || sudo service docker start
+
+          # Vérifications rapides (diagnostic)
+          docker info
+
+      # 🔧 Nettoyage plus agressif
       - name: Free disk space (aggressive)
         run: |
           echo "Espace avant nettoyage:"
@@ -49,7 +64,7 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"          
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           # Nettoyage Docker
           docker system prune -af --volumes
           echo "Espace après nettoyage:"
@@ -88,7 +103,7 @@ jobs:
             type=sha,format=short
             type=raw,value=${{ github.event.inputs.docker_tag }},enable=${{ github.event.inputs.docker_tag != '' }}
 
-      # Build & Push optimisé (push direct, pas de load, pas de metadata lourde)
+      # 🔧 Build avec options d'optimisation
       - name: Build & Push (arm64)
         uses: docker/build-push-action@v6
         with:
@@ -98,14 +113,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
+          provenance: false
+          # Options pour réduire l'usage disque
           build-args: |
             BUILDKIT_INLINE_CACHE=1
-            PIP_NO_CACHE_DIR=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=min  # mode=min au lieu de max
 
+      # 🔧 Nettoyage post-build
       - name: Cleanup after build
         if: always()
         run: |
-          docker system prune -af --volumes || true
+          docker system prune -af --volumes
           df -h
