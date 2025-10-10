@@ -96,9 +96,6 @@ jobs:
           file: ./docker/Dockerfile.jetson
           platforms: linux/arm64
           push: true
-          load: false
-          provenance: false
-          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
