@@ -1,84 +1,88 @@
-# Déploiement TensorRT-LLM sur Jetson Orin Nano
+# TensorRT-LLM Deployment on Jetson Orin Nano
 
-Guide complet pour déployer Qwen 2.5 1.5B avec TensorRT-LLM sur votre Jetson.
+Complete guide to deploy **Qwen 2.5 1.5B** with TensorRT-LLM on your Jetson.
 
-## 📋 Prérequis
+## 📋 Prerequisites
 
-- Jetson Orin Nano avec JetPack 6.0+ (r36.2.0)
-- Au moins 8 GB RAM disponible
-- Au moins 20 GB d'espace disque libre
-- Docker et nvidia-container-runtime installés
+- Jetson Orin Nano with JetPack 6.0+ (r36.2.0)  
+- At least 8 GB of available RAM  
+- At least 20 GB of free disk space  
+- Docker and nvidia-container-runtime installed  
 
-## 🚀 Déploiement rapide (recommandé)
+---
 
-### Option A : Avec moteur pré-buildé
+## 🚀 Quick Deployment (recommended)
 
-Si vous avez déjà un moteur TensorRT-LLM :
+### Option A: Using a pre-built engine
+
+If you already have a TensorRT-LLM engine:
 
 ```bash
-# 1. Cloner le repo
+# 1. Clone the repository
 cd ~/ASR_Agent
 
-# 2. Créer les répertoires pour les moteurs
+# 2. Create directories for engines
 mkdir -p volumes/trtllm-engines volumes/trtllm-checkpoints
 
-# 3. Copier votre moteur pré-buildé (si disponible)
+# 3. Copy your pre-built engine (if available)
 # cp -r /path/to/qwen2.5-1.5b-engine volumes/trtllm-engines/qwen2.5-1.5b
 
-# 4. Lancer les services
+# 4. Launch the services
 docker-compose -f docker-compose.jetson.yml up -d
 
-# 5. Vérifier le status
+# 5. Check status
 docker-compose -f docker-compose.jetson.yml ps
 docker-compose -f docker-compose.jetson.yml logs -f tensorrt-llm
 ```
 
-### Option B : Build du moteur à la volée
+---
 
-Si vous n'avez pas encore de moteur :
+### Option B: Build the engine on the fly
+
+If you don’t have a pre-built engine yet:
 
 ```bash
-# 1. Lancer uniquement le service TensorRT-LLM
+# 1. Start only the TensorRT-LLM service
 docker-compose -f docker-compose.jetson.yml up -d tensorrt-llm
 
-# 2. Entrer dans le container
+# 2. Enter the container
 docker exec -it trtllm-qwen bash
 
-# 3. Builder le moteur (15-30 minutes)
+# 3. Build the engine (takes 15–30 minutes)
 /app/build_engine.sh
 
-# 4. Vérifier que le moteur est créé
+# 4. Verify that the engine was created
 ls -lh /workspace/trt_engines/qwen2.5-1.5b/
 
-# 5. Redémarrer le service
+# 5. Restart the service
 exit
 docker-compose -f docker-compose.jetson.yml restart tensorrt-llm
 
-# 6. Lancer le service ASR
+# 6. Launch the ASR service
 docker-compose -f docker-compose.jetson.yml up -d asr-pipeline
 ```
 
-## 🧪 Tester l'installation
+---
 
-### Test du serveur TensorRT-LLM
+## 🧪 Test the Installation
+
+### Test TensorRT-LLM server
 
 ```bash
 # Health check
 curl http://localhost:8001/health
 
-# Test de génération
-curl -X POST http://localhost:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
+# Generation test
+curl -X POST http://localhost:8001/v1/chat/completions   -H "Content-Type: application/json"   -d '{
     "model": "qwen2.5-1.5b-instruct",
     "messages": [
       {
         "role": "system",
-        "content": "Tu es un assistant de correction de texte."
+        "content": "You are a text-correction assistant."
       },
       {
         "role": "user",
-        "content": "Corrige ce texte: bonjour  ,je  mappelle  xavier"
+        "content": "Fix this text: bonjour  ,je  mappelle  xavier"
       }
     ],
     "temperature": 0.1,
@@ -86,137 +90,151 @@ curl -X POST http://localhost:8001/v1/chat/completions \
   }'
 ```
 
-### Test de votre pipeline ASR
+### Test your ASR pipeline
 
 ```bash
-# Votre pipeline ASR devrait maintenant utiliser automatiquement TensorRT-LLM
-# Vérifier les logs
+# Your ASR pipeline should now automatically use TensorRT-LLM
+# Check logs
 docker-compose -f docker-compose.jetson.yml logs -f asr-pipeline
 ```
 
-## 📊 Performances attendues
+---
 
-Sur Jetson Orin Nano (8 GB) :
+## 📊 Expected Performance
 
-| Métrique | Valeur |
-|----------|--------|
-| **Latence (prompt 100 tokens)** | ~200-400ms |
-| **Throughput** | ~30-50 tokens/s |
-| **RAM utilisée** | ~2-3 GB |
-| **VRAM utilisée** | ~1.5-2 GB |
-| **Temps de build moteur** | 15-30 min |
+On Jetson Orin Nano (8 GB):
 
-## 🔧 Configuration avancée
+| Metric | Value |
+|--------|--------|
+| **Latency (100-token prompt)** | ~200–400 ms |
+| **Throughput** | ~30–50 tokens/s |
+| **RAM usage** | ~2–3 GB |
+| **VRAM usage** | ~1.5–2 GB |
+| **Engine build time** | 15–30 min |
 
-### Optimiser pour votre cas d'usage
+---
 
-Modifiez `build_qwen_trt_engine.sh` :
+## 🔧 Advanced Configuration
+
+### Optimize for your use case
+
+Edit `build_qwen_trt_engine.sh`:
 
 ```bash
-# Pour des textes plus courts (transcriptions courtes)
+# For short texts (short transcriptions)
 MAX_INPUT_LEN=512
 MAX_OUTPUT_LEN=256
 
-# Pour des textes plus longs (transcriptions longues)
+# For longer texts (long transcriptions)
 MAX_INPUT_LEN=4096
 MAX_OUTPUT_LEN=1024
 
-# Batch size (si vous traitez plusieurs fichiers)
+# Batch size (if processing multiple files)
 MAX_BATCH_SIZE=8
 ```
 
-### Variables d'environnement
+### Environment variables
 
-Dans `docker-compose.jetson.yml`, vous pouvez ajuster :
+In `docker-compose.jetson.yml`, you can adjust:
 
 ```yaml
 environment:
   - LLM_ENDPOINT=http://tensorrt-llm:8000
   - LLM_MODEL=qwen2.5-1.5b-instruct
-  - LLM_API_KEY=  # Optionnel si vous ajoutez de l'auth
+  - LLM_API_KEY=  # Optional if you add authentication
 ```
 
-## 🐛 Dépannage
+---
 
-### Le moteur ne se build pas
+## 🐛 Troubleshooting
+
+### Engine fails to build
 
 ```bash
-# Vérifier les logs
+# Check logs
 docker-compose -f docker-compose.jetson.yml logs tensorrt-llm
 
-# Vérifier l'espace disque
+# Check disk space
 df -h
 
-# Vérifier la RAM disponible
+# Check available RAM
 free -h
 ```
 
-### Erreur "CUDA out of memory"
+### “CUDA out of memory” error
 
 ```bash
-# Réduire le batch size
-# Dans build_qwen_trt_engine.sh :
+# Reduce batch size
+# In build_qwen_trt_engine.sh:
 MAX_BATCH_SIZE=1
 ```
 
-### Le serveur ne démarre pas
+### Server won’t start
 
 ```bash
-# Vérifier que le moteur existe
+# Check if the engine exists
 docker exec -it trtllm-qwen ls -lh /workspace/trt_engines/qwen2.5-1.5b/
 
-# Vérifier les permissions
+# Check permissions
 docker exec -it trtllm-qwen chmod -R 755 /workspace/trt_engines/
 ```
 
-## 📦 Structure des fichiers
+---
+
+## 📦 File Structure
 
 ```
 ~/ASR_Agent/
 ├── docker/
-│   ├── Dockerfile.jetson            # Votre image ASR
-│   └── Dockerfile.tensorrt-llm      # Image TensorRT-LLM
+│   ├── Dockerfile.jetson            # Your ASR image
+│   └── Dockerfile.tensorrt-llm      # TensorRT-LLM image
 ├── scripts/
-│   ├── build_qwen_trt_engine.sh     # Script de build
-│   └── trtllm_server.py             # Serveur API
+│   ├── build_qwen_trt_engine.sh     # Build script
+│   └── trtllm_server.py             # API server
 ├── docker-compose.jetson.yml        # Orchestration
 └── volumes/                         # Persistent data
-    ├── trtllm-engines/              # Moteurs TRT (rebuild pas nécessaire)
-    └── trtllm-checkpoints/          # Checkpoints intermédiaires
+    ├── trtllm-engines/              # TRT engines (no rebuild needed)
+    └── trtllm-checkpoints/          # Intermediate checkpoints
 ```
 
-## 🔄 Mise à jour
+---
 
-Pour mettre à jour vers une nouvelle version de Qwen :
+## 🔄 Updating
+
+To upgrade to a newer version of Qwen:
 
 ```bash
-# 1. Arrêter les services
+# 1. Stop services
 docker-compose -f docker-compose.jetson.yml down
 
-# 2. Supprimer l'ancien moteur
+# 2. Remove the old engine
 rm -rf volumes/trtllm-engines/qwen2.5-1.5b/*
 
-# 3. Modifier MODEL_NAME dans build_qwen_trt_engine.sh
-# MODEL_NAME="Qwen/Qwen2.5-3B-Instruct"  # Exemple pour 3B
+# 3. Update MODEL_NAME in build_qwen_trt_engine.sh
+# MODEL_NAME="Qwen/Qwen2.5-3B-Instruct"  # Example for 3B
 
-# 4. Rebuild et redémarrer
+# 4. Rebuild and restart
 docker-compose -f docker-compose.jetson.yml up -d --build
 ```
 
-## 💾 Sauvegarde du moteur
+---
 
-Le moteur TensorRT est lourd à rebuilder (15-30 min). Sauvegardez-le :
+## 💾 Engine Backup
+
+Building the TensorRT engine is time-consuming (15–30 min). Back it up:
 
 ```bash
-# Créer une archive du moteur
+# Create an archive of the engine
 tar -czf qwen2.5-1.5b-trt-engine.tar.gz volumes/trtllm-engines/qwen2.5-1.5b/
 
-# Restaurer sur une autre machine
+# Restore on another machine
 tar -xzf qwen2.5-1.5b-trt-engine.tar.gz -C volumes/trtllm-engines/
 ```
 
-## 📚 Ressources
+---
 
-- [TensorRT-LLM Documentation](https://github.com/NVIDIA/TensorRT-LLM)
-- [Qwen 2.5 Model Card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)
+## 📚 Resources
+
+- [TensorRT-LLM Documentation](https://github.com/NVIDIA/TensorRT-LLM)  
+- [Qwen 2.5 Model Card](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct)  
 - [Jetson AI Lab](https://www.jetson-ai-lab.com/)
