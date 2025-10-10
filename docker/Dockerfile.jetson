@@ -1,5 +1,5 @@
 # =============================================================================
-# Dockerfile Jetson (arm64) — ASR pipeline
+# Dockerfile Jetson (arm64) – ASR pipeline (OPTIMISÉ ESPACE DISQUE)
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
 # =============================================================================
 ARG L4T_TAG=r36.2.0-py3
@@ -14,14 +14,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # L4T-ML contient déjà la plupart des outils nécessaires
 # On installe uniquement ce qui manque vraiment
+# + Nettoyage agressif de l'image de base
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       tini \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean || true
+    && rm -rf /tmp/* /var/tmp/* \
+    && find /usr/share/doc -depth -type f ! -name copyright -delete \
+    && find /usr/share/man -type f -delete
 
 # -----------------------------------------------------------------------------
-# STAGE: builder — création du venv et installation des dépendances
+# STAGE: builder
 # -----------------------------------------------------------------------------
 FROM base AS builder
 WORKDIR /build
@@ -41,22 +45,22 @@ ENV PATH="/opt/venv/bin:$PATH" \
 COPY pyproject.toml README.md ./
 COPY ./src ./src
 
-# Installation des dépendances + package en mode éditable
-# - media: PyAV pour traitement audio/vidéo
-# - tensorrt: TensorRT et PyCUDA (Jetson uniquement)
-# - nemo: NeMo ASR toolkit
-RUN uv pip install --no-cache \
-    -e ".[media,tensorrt,nemo]"
+# Installation des dépendances + package en mode éditable avec nettoyage immédiat du cache uv
+RUN uv pip install --no-cache -e ".[media,tensorrt,nemo]" && \
+    rm -rf /root/.cache/uv /tmp/* /var/tmp/*
 
-# Vérification de l'installation (échoue le build si problème)
-RUN python3 -c "import sys; print('Python:', sys.version)" && \
-    python3 -c "import torch; print('PyTorch:', torch.__version__, '| CUDA:', torch.cuda.is_available())" && \
-    python3 -c "import nemo; print('NeMo:', nemo.__version__)" && \
-    python3 -c "import transformers; print('Transformers:', transformers.__version__)" && \
-    python3 -c "import huggingface_hub; print('HF Hub:', huggingface_hub.__version__)"
+# Vérification (mais sans garder les outputs en mémoire)
+RUN python3 -c "import torch, nemo, transformers" > /dev/null 2>&1
+
+# 🔧 Suppression des fichiers inutiles dans le venv
+RUN find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/venv -name "*.pyc" -delete && \
+    find /opt/venv -name "*.pyo" -delete && \
+    rm -rf /opt/venv/lib/python*/site-packages/*/tests
 
 # -----------------------------------------------------------------------------
-# STAGE: runtime — image finale optimisée
+# STAGE: runtime (image finale ultra-légère)
 # -----------------------------------------------------------------------------
 FROM base AS runtime
 WORKDIR /app
@@ -78,10 +82,8 @@ COPY --chown=appuser:appuser ./scripts ./scripts
 
 # Configuration PATH pour utiliser le venv
 ENV PATH="/opt/venv/bin:$PATH" \
-    VIRTUAL_ENV="/opt/venv"
-
-# Variables d'environnement runtime
-ENV NVIDIA_VISIBLE_DEVICES=all \
+    VIRTUAL_ENV="/opt/venv" \
+    NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     PYTHONPATH=/app \
     TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
@@ -92,6 +94,9 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 # Création des répertoires de cache
 RUN mkdir -p /app/.cache/huggingface /app/.cache/torch && \
     chown -R appuser:appuser /app/.cache
+
+# 🔧 Nettoyage final de l'image runtime
+RUN rm -rf /tmp/* /var/tmp/* /root/.cache
 
 # Passage en utilisateur non-root
 USER appuser
