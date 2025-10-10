@@ -44,9 +44,9 @@ docs/
 .gitlab-ci.yml
 
 # Docker
-Dockerfile*
-docker-compose*.yml
-.dockerignore
+#Dockerfile*
+#docker-compose*.yml
+#.dockerignore
 
 # Logs et cache
 *.log
