@@ -1,5 +1,5 @@
 # =============================================================================
-# Dockerfile Jetson (arm64) – ASR pipeline (OPTIMISÉ ESPACE DISQUE)
+# Dockerfile Jetson (arm64) — ASR pipeline (ULTRA-OPTIMISÉ ESPACE DISQUE)
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
 # =============================================================================
 ARG L4T_TAG=r36.2.0-py3
@@ -12,17 +12,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
     OMP_NUM_THREADS=1
 
-# L4T-ML contient déjà la plupart des outils nécessaires
-# On installe uniquement ce qui manque vraiment
-# + Nettoyage agressif de l'image de base
+# Nettoyage agressif de l'image de base
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       tini \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /tmp/* /var/tmp/* \
+    && rm -rf /tmp/* /var/tmp/* /root/.cache \
     && find /usr/share/doc -depth -type f ! -name copyright -delete \
-    && find /usr/share/man -type f -delete
+    && find /usr/share/man -type f -delete \
+    && find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' -exec rm -rf {} + \
+    && find / -name "*.pyc" -delete 2>/dev/null || true \
+    && find / -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # -----------------------------------------------------------------------------
 # STAGE: builder
@@ -30,34 +31,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM base AS builder
 WORKDIR /build
 
-# Installation de uv (gestionnaire de packages moderne)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+# Installation de uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    rm -rf /root/.cache
 
-# Mise à jour du PATH pour inclure uv
 ENV PATH="/root/.local/bin:$PATH"
 
-# Création du venv dans /opt/venv
+# Création du venv
 RUN uv venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
 
-# Copie des fichiers nécessaires pour l'installation du package
+# Copie des fichiers nécessaires
 COPY pyproject.toml README.md ./
 COPY ./src ./src
 
-# Installation des dépendances + package en mode éditable avec nettoyage immédiat du cache uv
-RUN uv pip install --no-cache -e ".[media,tensorrt,nemo]" && \
-    rm -rf /root/.cache/uv /tmp/* /var/tmp/*
+# Installation avec nettoyage immédiat et agressif
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache -e ".[media,tensorrt,nemo]" && \
+    rm -rf /root/.cache /tmp/* /var/tmp/*
 
-# Vérification (mais sans garder les outputs en mémoire)
-RUN python3 -c "import torch, nemo, transformers" > /dev/null 2>&1
-
-# 🔧 Suppression des fichiers inutiles dans le venv
+# Nettoyage ultra-agressif du venv
 RUN find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
     find /opt/venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
     find /opt/venv -name "*.pyc" -delete && \
     find /opt/venv -name "*.pyo" -delete && \
-    rm -rf /opt/venv/lib/python*/site-packages/*/tests
+    find /opt/venv -name "*.c" -delete && \
+    find /opt/venv -name "*.so.dbg" -delete && \
+    find /opt/venv -type f -name "*.md" -delete 2>/dev/null || true && \
+    find /opt/venv -type f -name "*.txt" ! -name "requirements.txt" -delete 2>/dev/null || true && \
+    rm -rf /opt/venv/lib/python*/site-packages/*/tests \
+           /opt/venv/lib/python*/site-packages/*/test \
+           /opt/venv/lib/python*/site-packages/*/.git \
+           /opt/venv/share
+
+# Suppression des binaires de développement inutiles
+RUN find /opt/venv -type f -executable -name "*-config" -delete && \
+    find /opt/venv/include -type f -delete 2>/dev/null || true
+
+# Vérification rapide
+RUN python3 -c "import torch, nemo, transformers" > /dev/null 2>&1
 
 # -----------------------------------------------------------------------------
 # STAGE: runtime (image finale ultra-légère)
@@ -65,22 +78,22 @@ RUN find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true &
 FROM base AS runtime
 WORKDIR /app
 
-# Création utilisateur non-root pour la sécurité
+# Création utilisateur non-root
 RUN useradd -u 1000 -ms /bin/bash appuser && \
     chown -R appuser:appuser /app
 
-# Copie du venv complet depuis le builder
+# Copie UNIQUEMENT du venv (pas de cache ni fichiers temporaires)
 COPY --from=builder /opt/venv /opt/venv
 
-# Copie du code source (nécessaire car installé en mode éditable -e)
+# Copie du code source (minimal)
 COPY --from=builder /build/src ./src
 COPY --from=builder /build/pyproject.toml /build/README.md ./
 
-# Copie des autres fichiers de l'application
+# Copie des fichiers de l'application
 COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./scripts ./scripts
 
-# Configuration PATH pour utiliser le venv
+# Configuration
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv" \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -95,21 +108,17 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN mkdir -p /app/.cache/huggingface /app/.cache/torch && \
     chown -R appuser:appuser /app/.cache
 
-# 🔧 Nettoyage final de l'image runtime
-RUN rm -rf /tmp/* /var/tmp/* /root/.cache
+# Nettoyage final ultra-agressif
+RUN rm -rf /tmp/* /var/tmp/* /root/.cache /var/cache/* && \
+    find / -name "*.pyc" -delete 2>/dev/null || true && \
+    find / -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Passage en utilisateur non-root
 USER appuser
 
-# Port exposé (si vous avez une API)
 EXPOSE 8000
 
-# Health check pour orchestration (Kubernetes, Docker Swarm, etc.)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-# Tini comme PID 1 pour gérer proprement les signaux
 ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Commande par défaut — à adapter selon votre point d'entrée
 CMD ["python3", "src/pipeline/full_pipeline.py"]

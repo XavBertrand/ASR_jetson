@@ -26,48 +26,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Move Docker data-root to large workspace volume
-        shell: bash
+      - name: Free disk space (aggressive cleanup first)
         run: |
-          set -euxo pipefail
-
-          # Arrêter Docker (selon l'image runner)
-          sudo systemctl stop docker || sudo service docker stop || true
-
-          # Utiliser le volume du workspace (large partition)
-          NEW_ROOT="/home/runner/work/_docker"
-          sudo mkdir -p "${NEW_ROOT}"
-          sudo chown -R root:root "${NEW_ROOT}"
-
-          # Migrer l'existant si présent (best effort, ne casse pas si vide)
-          if [ -d /var/lib/docker ]; then
-            sudo rsync -aHAXx /var/lib/docker/ "${NEW_ROOT}/" || true
-          fi
-
-          # Pointer Docker vers le nouveau data-root
-          echo '{"data-root":"'"${NEW_ROOT}"'"}' | sudo tee /etc/docker/daemon.json
-
-          # Redémarrer Docker
-          sudo systemctl start docker || sudo service docker start
-
-          # Vérifications rapides (diagnostic)
-          docker info
-
-      # 🔧 Nettoyage plus agressif
-      - name: Free disk space (aggressive)
-        run: |
-          echo "Espace avant nettoyage:"
+          echo "=== Espace AVANT nettoyage ==="
           df -h
           
-          # Suppression manuelle des gros dossiers
+          # Suppression des gros dossiers inutiles
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          # Nettoyage Docker
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+          
+          # Nettoyage APT
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          
+          echo "=== Espace APRÈS nettoyage initial ==="
+          df -h
+
+      - name: Move Docker to /mnt (large partition)
+        run: |
+          set -euxo pipefail
+          
+          echo "=== Arrêt de Docker ==="
+          sudo systemctl stop docker.socket || true
+          sudo systemctl stop docker || true
+          
+          # Utiliser /mnt qui a 66G disponibles
+          NEW_ROOT="/mnt/docker-data"
+          sudo mkdir -p "${NEW_ROOT}"
+          
+          echo "=== Migration des données Docker existantes ==="
+          if [ -d /var/lib/docker ]; then
+            sudo du -sh /var/lib/docker
+            # Copie rapide sans préservation d'attributs étendus qui peuvent bloquer
+            sudo rsync -a --delete /var/lib/docker/ "${NEW_ROOT}/" || true
+            sudo rm -rf /var/lib/docker
+          fi
+          
+          echo "=== Configuration du nouveau data-root ==="
+          echo '{
+            "data-root": "'"${NEW_ROOT}"'",
+            "storage-driver": "overlay2",
+            "max-concurrent-downloads": 3,
+            "max-concurrent-uploads": 3
+          }' | sudo tee /etc/docker/daemon.json
+          
+          echo "=== Redémarrage de Docker ==="
+          sudo systemctl daemon-reload
+          sudo systemctl start docker
+          
+          echo "=== Vérification Docker ==="
+          docker info | grep -i "docker root dir"
+          docker info | grep -i "storage driver"
+          
+          echo "=== Espace disque après migration ==="
+          df -h
+
+      - name: Prune Docker before build
+        run: |
           docker system prune -af --volumes
-          echo "Espace après nettoyage:"
+          docker builder prune -af
           df -h
 
       - name: Set up QEMU (arm64)
@@ -79,6 +102,7 @@ jobs:
           driver-opts: |
             image=moby/buildkit:latest
             network=host
+          buildkitd-flags: --debug
 
       - name: Login to NGC
         uses: docker/login-action@v3
@@ -103,8 +127,7 @@ jobs:
             type=sha,format=short
             type=raw,value=${{ github.event.inputs.docker_tag }},enable=${{ github.event.inputs.docker_tag != '' }}
 
-      # 🔧 Build avec options d'optimisation
-      - name: Build & Push (arm64)
+      - name: Build & Push (arm64) - With disk monitoring
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -114,15 +137,26 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
-          # Options pour réduire l'usage disque
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
+          sbom: false
+          # Optimisations pour réduire l'usage disque
           cache-from: type=gha
-          cache-to: type=gha,mode=min  # mode=min au lieu de max
+          cache-to: type=gha,mode=min
+          build-args: |
+            BUILDKIT_INLINE_CACHE=0
+          # Pas de build en parallèle pour économiser l'espace
+          builder: ${{ steps.buildx.outputs.name }}
 
-      # 🔧 Nettoyage post-build
+      - name: Monitor disk usage during build
+        if: always()
+        run: |
+          echo "=== Espace disque final ==="
+          df -h
+          echo "=== Taille du data-root Docker ==="
+          sudo du -sh /mnt/docker-data || true
+
       - name: Cleanup after build
         if: always()
         run: |
           docker system prune -af --volumes
+          docker builder prune -af
           df -h
