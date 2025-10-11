@@ -49,7 +49,7 @@ COPY ./src ./src
 # Installation avec nettoyage immédiat et agressif
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --no-cache -e ".[media,tensorrt,nemo]" && \
-    rm -rf /root/.cache /tmp/* /var/tmp/*
+    rm -rf /tmp/* /var/tmp/*
 
 # Nettoyage ultra-agressif du venv
 RUN find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
