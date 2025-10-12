@@ -1,0 +1,110 @@
+name: Run Unit Tests (PR)
+
+on:
+  pull_request:
+    branches: [ master, develop ]
+  push:
+    branches: [ master ]  # utile pour voir l'état des tests sur master après merge
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python 3.10 • Ubuntu
+    runs-on: ubuntu-latest
+    env:
+      # ✅ Ajout clé : rendre le dossier racine importable → "src" devient visible
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show runner disk space (before)
+        run: |
+          echo "Espace disque avant install :"
+          df -h
+
+      - name: Install system audio deps (ffmpeg, sox, libsndfile)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg sox libsndfile1
+          ffmpeg -version | head -n 1
+          sox --version | head -n 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # 🧰 Cache uv + venv pour accélérer les CI suivantes
+      - name: Cache uv + venv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: uv-${{ runner.os }}-py310-${{ hashFiles('pyproject.toml', 'uv.lock', 'poetry.lock', 'requirements.txt') }}
+
+      - name: Install uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      # 💡 Adapte les "extras" aux tiens. Ici on suppose que:
+      # - "dev" contient pytest et les outils de test
+      # - "media" contient torchaudio / audio IO
+      # - "nemo" apporte la diarization (TitaNet-S) si tu l'utilises dans les tests
+      # On reste CPU-only sur le runner CI.
+      - name: Resolve & install dependencies with uv (CPU)
+        env:
+          # Force CPU pour torch/torchaudio si tu utilises ces libs
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+        run: |
+          # Si tu utilises uv.lock, garde --frozen. Sinon retire-le.
+          uv sync --extra dev --extra media --extra nemo
+
+      - name: Print environment
+        run: |
+          . .venv/bin/activate
+          python -V
+          pip list
+
+      # ✅ On exécute précisément les tests que tu as listés
+      - name: Run unit tests (pytest)
+        run: |
+          . .venv/bin/activate
+          pytest \
+            tests/test_rnnoise.py \
+            tests/test_vad.py \
+            tests/test_diarization.py \
+            tests/test_clustering.py \
+            tests/test_asr_whisper.py \
+            tests/test_txt_file_format.py \
+            tests/test_full_pipeline.py \
+            -q --maxfail=1 --disable-warnings \
+            --junitxml=reports/junit.xml \
+            --durations=20
+
+      # 📦 Artefacts utiles en cas d'échec (logs, rapports pytest, etc.)
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports
+          path: |
+            reports/junit.xml
+            .pytest_cache/**/*
+          if-no-files-found: ignore
+
+      - name: Show runner disk space (after)
+        if: always()
+        run: |
+          echo "Espace disque après tests :"
+          df -h
