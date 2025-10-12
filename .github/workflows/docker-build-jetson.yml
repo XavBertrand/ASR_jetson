@@ -4,6 +4,8 @@ on:
   push:
     branches: [ "master" ]
     tags:     [ 'v*.*' ]            # build sur release tags (ex: v0.1.0)
+  pull_request:
+    branches: [ 'master' ]  # ou la/les branches cibles
 
   workflow_dispatch:
     inputs:
