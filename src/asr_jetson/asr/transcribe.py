@@ -54,8 +54,13 @@ def transcribe_full(model, wav_path, language=None):
         language=language,     # None = auto
         task="transcribe",
         vad_filter=False,      # on a déjà fait la VAD en amont
-        chunk_length=15,       # garde petit pour la stabilité WSL2 si besoin
+        chunk_length=30,       # garde petit pour la stabilité WSL2 si besoin
         word_timestamps=False,
+        beam_size=5,  # beam search (meilleure ponctuation/capitales)
+        temperature=[0.0, 0.2, 0.4],  # beam = 0.0 => déterministe
+        condition_on_previous_text=True,  # conserve le contexte entre chunks
+        compression_ratio_threshold=2.4,  # garde-fous texte dégénéré
+        initial_prompt="Ponctue correctement en français (., ; : ! ?), garde les nombres et noms propres."
     )
     out = []
     for s in segments:
