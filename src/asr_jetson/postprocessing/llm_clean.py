@@ -9,7 +9,7 @@ import requests
 from typing import Optional
 
 os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
-os.environ["LLM_MODEL"] = "qwen2.5-1.5b-instruct"
+os.environ["LLM_MODEL"] = "gemma2:2b"
 
 SYS_PROMPT = (
     "Tu es un correcteur automatique de transcription française. "
@@ -17,7 +17,7 @@ SYS_PROMPT = (
     "2) Garde le sens AU PLUS PROCHE possible, 3) Ne SUPPRIME pas d'information sémantique, "
     "4) Ne réinvente rien, 5) Conserve la structure et les tags de locuteur 'SPEAKER_X:' "
     "6) Fusionne les micro-bégaiements évidents, 7) Ne change pas les numéros de SPEAKER."
-    "8) Tu n’écris JA%AIS de commentaires ni d’analyses. "
+    "8) Tu n’écris JAMAIS de commentaires ni d’analyses. "
     "9) Tu produis UNIQUEMENT le texte corrigé, sans aucun ajout ni retrait. "
     "10) Ton rôle est mécanique, comme un correcteur orthographique humain discipliné."
 )
@@ -138,30 +138,35 @@ def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, t
 #     if r.status_code == 200:
 #         return r.json().get("message", {}).get("content", "").strip()
 #     return None
+
 def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
     """
-    Appelle un serveur Ollama local avec contraintes strictes.
-    Utilise un message "assistant" préfixé pour forcer le format.
+    Appelle Ollama /api/chat proprement pour Gemma 2.
+    - Pas d'amorçage 'assistant' en dernier (ça casse le template de certains modèles).
+    - Augmente num_ctx pour éviter la troncature des longs textes.
+    - Évite les few-shots si l'entrée est déjà longue.
     """
+    import re
     url = "http://localhost:11434/api/chat"
 
-    # Extraire le premier tag SPEAKER
-    first_speaker_match = re.match(r'(SPEAKER_\d+:)', text)
-    first_speaker = first_speaker_match.group(1) if first_speaker_match else "SPEAKER_1:"
+    # Si le texte est long, on retire les EXEMPLES du prompt (ils bouffent du contexte)
+    user_msg = USER_INSTR + "\n\n" + text
+    if len(text.split()) > 1200:  # seuil empirique
+        user_msg = USER_INSTR.replace(FEW_SHOT_EXAMPLES, "") + "\n\n" + text
 
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYS_PROMPT},
-            {"role": "user", "content": USER_INSTR + "\n\n" + text},
-            # Astuce : on "amorce" la réponse du modèle
-            {"role": "assistant", "content": first_speaker + " "},
+            {"role": "system", "content": SYS_PROMPT.replace("JA%AIS", "JAMAIS")},
+            {"role": "user",   "content": user_msg},
+            # Ne PAS ajouter de message assistant ici
         ],
         "options": {
             "temperature": 0.0,
             "top_p": 0.9,
             "repeat_penalty": 1.1,
-            "num_predict": len(text.split()) * 3,
+            "num_predict": max(512, len(text.split()) * 2),
+            "num_ctx": 8192  # <-- IMPORTANT : augmente la fenêtre de contexte si ton modèle le supporte
         },
         "stream": False,
     }
@@ -170,22 +175,50 @@ def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
         r = requests.post(url, json=payload, timeout=timeout_s)
         if r.status_code == 200:
             content = r.json().get("message", {}).get("content", "").strip()
-
-            # Le modèle va continuer après notre préfixe
-            # On reconstruit la réponse complète
-            full_content = first_speaker + " " + content
-
-            # Validation
-            if not _validate_ollama_output(text, full_content):
-                return None
-
-            return full_content
+            # Sanity check : si le modèle n'a pas vu le texte, il répond parfois "Commencez...", "J'attends..."
+            lower = content.lower()
+            if ("commencez" in lower or "j'attends votre transcription" in lower
+                or ("corriger" in lower and len(content.split()) < 12)):
+                # On réessaie en 'génération simple' avec amorce stricte
+                return _ollama_generate_prefix(model, text, timeout_s)
+            # Validation existante (tags SPEAKER, longueur, etc.)
+            if _validate_ollama_output(text, content):
+                return content
         else:
-            print(f"⚠️ Ollama erreur HTTP {r.status_code}")
-            return None
+            print(f"⚠️ Ollama HTTP {r.status_code}: {r.text[:200]}")
     except Exception as e:
         print(f"⚠️ Erreur Ollama: {e}")
-        return None
+    return None
+
+def _ollama_generate_prefix(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
+    """Fallback : /api/generate avec amorce stricte 'SPEAKER_X: ' pour forcer le format."""
+    import re, json, requests
+    url = "http://localhost:11434/api/generate"
+    first = re.search(r'(SPEAKER_\d+:)', text)
+    prefix = (first.group(1) + " ") if first else "SPEAKER_1: "
+    prompt = (
+        SYS_PROMPT.replace("JA%AIS", "JAMAIS")
+        + "\n\n"
+        + USER_INSTR.replace(FEW_SHOT_EXAMPLES, "")
+        + "\n\n"
+        + "Réponds en commençant exactement par: " + prefix + "\n\n"
+        + text
+        + "\n\n"
+    )
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "options": {"temperature": 0.0, "num_predict": max(512, len(text.split()) * 2), "num_ctx": 8192},
+        "stream": False,
+    }
+    r = requests.post(url, json=payload, timeout=timeout_s)
+    if r.status_code == 200:
+        out = r.json().get("response", "").strip()
+        # Préfixe garanti
+        if not out.startswith(prefix):
+            out = prefix + out
+        return out if _validate_ollama_output(text, out) else None
+    return None
 
 
 def _validate_ollama_output(original: str, corrected: str) -> bool:
@@ -219,10 +252,57 @@ def _validate_ollama_output(original: str, corrected: str) -> bool:
 
     return True
 
+def _validate_structure(original: str, corrected: str) -> bool:
+    """Vérifie qu'on a conservé les mêmes SPEAKER tags et la même structure de lignes."""
+    import re
+    orig_tags = re.findall(r'^(\s*SPEAKER_\d+:\s*)', original, flags=re.MULTILINE)
+    corr_tags = re.findall(r'^(\s*SPEAKER_\d+:\s*)', corrected, flags=re.MULTILINE)
+    return orig_tags == corr_tags and set(re.findall(r'SPEAKER_\d+:', original)) == set(re.findall(r'SPEAKER_\d+:', corrected))
+
+def _clean_with_languagetool(text: str) -> Optional[str]:
+    """
+    Fallback 'léger' via LanguageTool (rule-based) — sans LLM.
+    - Corrige ligne par ligne pour préserver strictement les préfixes 'SPEAKER_X:'.
+    - Si LT n'est pas dispo (module/Java), renvoie None.
+    ENV optionnel: LT_ENDPOINT=http://host:port (serveur LT distant)
+    """
+    try:
+        import os, re
+        import language_tool_python
+
+        lt_endpoint = os.getenv("LT_ENDPOINT", "").strip() or None
+        if lt_endpoint:
+            tool = language_tool_python.LanguageTool('fr', remote_server=lt_endpoint)
+        else:
+            tool = language_tool_python.LanguageTool('fr')  # nécessite Java local
+
+        out_lines = []
+        for line in text.splitlines():
+            m = re.match(r'^(\s*SPEAKER_\d+:\s*)(.*)$', line)
+            if m:
+                prefix, content = m.group(1), m.group(2)
+                # Correction uniquement sur le contenu, jamais sur le préfixe
+                corrected = tool.correct(content)
+                # Normalise un seul espace après "SPEAKER_X:"
+                out_lines.append(f"{prefix.strip()} {corrected.strip()}")
+            else:
+                # Hors ligne SPEAKER, corrige tel quel (ou laisse brut si tu préfères)
+                out_lines.append(tool.correct(line))
+
+        corrected_text = "\n".join(out_lines).rstrip() + "\n"
+        # Garde-fou : même structure de tags et ordre des lignes SPEAKER
+        if _validate_structure(text, corrected_text):
+            return corrected_text
+        return None
+    except Exception as e:
+        print(f"⚠️ LanguageTool indisponible: {e}")
+        return None
+
+
 def clean_text_with_llm(
     input_txt: Path,
     output_txt: Path,
-    default_model: str = "Qwen2.5-1.5B-Instruct",
+    default_model: str = "gemma2:2b",
 ) -> Path:
     input_txt = Path(input_txt)
     output_txt = Path(output_txt)
@@ -261,7 +341,17 @@ def clean_text_with_llm(
         except Exception as e:
             print(f"⚠️ Erreur Ollama: {e}")
 
-    # 3) Fallback regex minimal (toujours fonctionner)
+    # 3) Fallback LanguageTool (rule-based) si LLM KO
+    print("🔄 Tentative LanguageTool (fallback non-LLM)")
+    lt_out = _clean_with_languagetool(raw)
+    if lt_out:
+        output_txt.write_text(lt_out, encoding="utf-8")
+        print("✅ Correction LanguageTool OK")
+        return output_txt
+    else:
+        print("⚠️ LanguageTool indisponible ou structure invalide, fallback regex")
+
+    # 4) Fallback regex minimal (toujours fonctionner)
     print("🔧 Utilisation du fallback regex")
     cleaned = _basic_local_cleanup(raw)
     output_txt.write_text(cleaned + "\n", encoding="utf-8")
