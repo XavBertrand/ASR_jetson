@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Literal
 import soundfile as sf
+import gc, torch
 
 from src.asr_jetson.vad.silero import load_silero_vad, apply_vad
 from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings
@@ -77,5 +78,10 @@ def apply_diarization(
         )
 
     diarized_segments = _ensure_seconds(diarized_segments, audio_path)
+
+    # remove titanet from memory
+    del spk_model
+    torch.cuda.empty_cache()
+    gc.collect()
 
     return diarized_segments

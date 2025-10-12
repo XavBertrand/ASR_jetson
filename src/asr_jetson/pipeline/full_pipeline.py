@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import os
 import torch
+import gc
 from typing import List, Dict, Optional
 
 # === Imports de tes modules existants ===
@@ -48,7 +49,7 @@ def _write_srt(segments: List[Dict], path: Path):
 
 @dataclass
 class PipelineConfig:
-    denoise: bool = True             # applique RNNoise/afftdn
+    denoise: bool = False             # applique RNNoise/afftdn
     device: str = "cpu"              # "cpu" | "cuda"
     n_speakers: int = 2
     clustering_method: str = "spectral"      # "spectral" | "kmeans"
@@ -123,6 +124,11 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         model, wav_path, diar_segments, language=cfg.language
     )
 
+    # delete whisper model from memory
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+
     # 3) Fusion (ASR + speaker par recouvrement temporel)
     labeled = attach_speakers(diar_segments, asr_segments)
     # labeled: [{start,end,text,speaker}, ...]
@@ -192,7 +198,6 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         for seg in labeled
     ]
 
-    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
     out_txt.parent.mkdir(parents=True, exist_ok=True)
 
     write_single_block_per_speaker_txt(
