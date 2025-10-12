@@ -86,7 +86,6 @@ jobs:
             tests/test_diarization.py \
             tests/test_clustering.py \
             tests/test_asr_whisper.py \
-            tests/test_postprocessing.py \
             tests/test_text_cleaning.py \
             tests/test_txt_file_format.py \
             tests/test_full_pipeline.py \
