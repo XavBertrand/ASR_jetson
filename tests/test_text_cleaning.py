@@ -6,7 +6,7 @@ import types
 import pytest
 
 # Import de la fonction à tester
-from src.asr_jetson.postprocessing.llm_clean import clean_text_with_llm
+from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 
 # ---------------------------------------------------------------------
 # Helpers de mocks pour requests.post

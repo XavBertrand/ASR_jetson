@@ -1,7 +1,7 @@
 from pathlib import Path
 import subprocess
 import pytest
-from src.asr_jetson.preprocessing.rnnoise import apply_rnnoise
+from asr_jetson.preprocessing.rnnoise import apply_rnnoise
 
 from utils import PROJECT_ROOT
 

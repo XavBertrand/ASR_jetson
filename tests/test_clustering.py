@@ -1,5 +1,5 @@
 import numpy as np
-from src.asr_jetson.diarization.clustering import cluster_embeddings
+from asr_jetson.diarization.clustering import cluster_embeddings
 
 
 def test_cluster_embeddings_two_groups():

@@ -16,7 +16,7 @@ def test_full_pipeline_end_to_end(tmp_path):
     """
     # Import tardif pour éviter un ImportError à la collection
     try:
-        from src.asr_jetson.pipeline.full_pipeline import PipelineConfig, run_pipeline
+        from asr_jetson.pipeline.full_pipeline import PipelineConfig, run_pipeline
     except Exception as e:
         pytest.skip(f"Import pipeline impossible (dépendances manquantes ?) : {e}")
 

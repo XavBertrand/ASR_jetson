@@ -9,9 +9,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_asr_on_real_file_and_attach_speakers():
     # imports tardifs pour éviter d’échouer à la découverte des tests
     try:
-        from src.asr_jetson.diarization.pipeline_diarization import apply_diarization
-        from src.asr_jetson.asr.whisper_engine import load_faster_whisper
-        from src.asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
+        from asr_jetson.diarization.pipeline_diarization import apply_diarization
+        from asr_jetson.asr.whisper_engine import load_faster_whisper
+        from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
     except Exception as e:
         pytest.skip(f"Imports pipeline/ASR indisponibles : {e}")
 

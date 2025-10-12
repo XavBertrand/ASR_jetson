@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from src.asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt  # type: ignore
+from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt  # type: ignore
 
 
 def _mk_seg(start: float, end: float, text: str, speaker):

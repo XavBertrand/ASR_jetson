@@ -17,6 +17,9 @@ jobs:
   tests:
     name: Python 3.10 • Ubuntu
     runs-on: ubuntu-latest
+    env:
+      # ✅ Ajout clé : rendre le dossier racine importable → "src" devient visible
+      PYTHONPATH: ${{ github.workspace }}
 
     steps:
       - name: Checkout
