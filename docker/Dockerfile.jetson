@@ -2,8 +2,31 @@
 # Dockerfile Jetson (arm64) — ASR pipeline (ULTRA-OPTIMISÉ ESPACE DISQUE)
 # Base NVIDIA L4T-ML (PyTorch + CUDA + cuDNN + TensorRT déjà intégrés)
 # =============================================================================
+
 ARG L4T_TAG=r36.2.0-py3
 FROM nvcr.io/nvidia/l4t-ml:${L4T_TAG} AS base
+
+# =============================================================================
+# --- Build-time metadata (injectés par le workflow) ---
+ARG GIT_BRANCH=unknown
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG APP_VERSION=dev
+
+# Labels OCI (visibles sur Docker Hub)
+LABEL org.opencontainers.image.source="https://github.com/XavBertrand/ASR_jetson" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.ref.name="${GIT_BRANCH}"
+
+# Variables runtime (inspectables dans le container)
+ENV GIT_BRANCH="${GIT_BRANCH}" \
+    GIT_SHA="${VCS_REF}" \
+    APP_VERSION="${APP_VERSION}" \
+    BUILD_DATE="${BUILD_DATE}"
+# =============================================================================
+
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -48,7 +71,7 @@ COPY ./src ./src
 
 # Installation avec nettoyage immédiat et agressif
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache -e ".[media,tensorrt,nemo]" && \
+    uv pip install --no-cache -e ".[media,tensorrt,nemo]" language-tool-python && \
     rm -rf /root/.cache /tmp/* /var/tmp/*
 
 # Nettoyage ultra-agressif du venv
@@ -81,6 +104,15 @@ WORKDIR /app
 # Création utilisateur non-root
 RUN useradd -u 1000 -ms /bin/bash appuser && \
     chown -R appuser:appuser /app
+
+# Java 21 requis par language_tool_python (LanguageTool)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openjdk-21-jre-headless && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# JAVA_HOME (ARM64 Jetson)
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-arm64
+ENV PATH="$JAVA_HOME/bin:$PATH"
 
 # Copie UNIQUEMENT du venv (pas de cache ni fichiers temporaires)
 COPY --from=builder /opt/venv /opt/venv
