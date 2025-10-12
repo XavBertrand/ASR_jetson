@@ -192,7 +192,6 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         for seg in labeled
     ]
 
-    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
     out_txt.parent.mkdir(parents=True, exist_ok=True)
 
     write_single_block_per_speaker_txt(
