@@ -2,7 +2,7 @@ name: Build & Push Docker (Jetson arm64)
 
 on:
   push:
-    branches: [ "master", "develop"  ]
+    branches: [ "master" ]
     tags:     [ 'v*.*' ]            # build sur release tags (ex: v0.1.0)
 
   workflow_dispatch:
