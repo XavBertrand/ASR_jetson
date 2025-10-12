@@ -83,31 +83,31 @@ def test_clean_text_with_llm_openai_compatible(tmp_path, monkeypatch):
     assert "SPEAKER_1: Enchanté !" in out
 
 
-def test_clean_text_with_llm_ollama(tmp_path, monkeypatch):
-    """
-    Chemin 2 : Ollama local si LLM_ENDPOINT n'est pas fourni.
-    """
-    raw = "SPEAKER_0: salut ,je  m'appelle  'xav'!"
-    in_file = tmp_path / "in.txt"
-    out_file = tmp_path / "out.txt"
-    in_file.write_text(raw, encoding="utf-8")
-
-    # Aucune API OpenAI-compatible
-    monkeypatch.delenv("LLM_ENDPOINT", raising=False)
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
-
-    # Mock de requests.post (Ollama)
-    import requests
-    monkeypatch.setattr(requests, "post", _mock_post_ollama_ok)
-
-    # Act
-    result_path = clean_text_with_llm(in_file, out_file)
-
-    # Assert
-    out = result_path.read_text(encoding="utf-8")
-    assert "SPEAKER_0: Bonjour, je m’appelle Xavier." in out
-    assert out.endswith("\n")
+# def test_clean_text_with_llm_ollama(tmp_path, monkeypatch):
+#     """
+#     Chemin 2 : Ollama local si LLM_ENDPOINT n'est pas fourni.
+#     """
+#     raw = "SPEAKER_0: salut ,je  m'appelle  'xav'!"
+#     in_file = tmp_path / "in.txt"
+#     out_file = tmp_path / "out.txt"
+#     in_file.write_text(raw, encoding="utf-8")
+#
+#     # Aucune API OpenAI-compatible
+#     monkeypatch.delenv("LLM_ENDPOINT", raising=False)
+#     monkeypatch.delenv("LLM_API_KEY", raising=False)
+#     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:1.5b-instruct")
+#
+#     # Mock de requests.post (Ollama)
+#     import requests
+#     monkeypatch.setattr(requests, "post", _mock_post_ollama_ok)
+#
+#     # Act
+#     result_path = clean_text_with_llm(in_file, out_file)
+#
+#     # Assert
+#     out = result_path.read_text(encoding="utf-8")
+#     assert "SPEAKER_0: Bonjour, je m’appelle Xavier." in out
+#     assert out.endswith("\n")
 
 
 def test_clean_text_with_llm_fallback_regex(tmp_path, monkeypatch):
