@@ -18,6 +18,9 @@ def load_faster_whisper(model_name: str, device: str, compute_type: str):
     os.environ.setdefault("MKL_NUM_THREADS", "1")
     os.environ.setdefault("TQDM_DISABLE", "1")
 
+    os.environ.setdefault("CT2_USE_MMAP", "1")
+    os.environ.setdefault("CT2_BEAM_SIZE", "5")
+
     try:
         model = WhisperModel(
             model_name,
