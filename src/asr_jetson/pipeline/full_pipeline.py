@@ -61,6 +61,7 @@ class PipelineConfig:
     whisper_compute: str = "int8"      # int8 / int8_float16 / float16 / float32
     language: Optional[str] = None     # None = auto
     out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
+    diarization_backend: str = "titanet"
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
@@ -114,7 +115,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         n_speakers=cfg.n_speakers,
         device=device,
         clustering_method=cfg.clustering_method,
-        backend="pyannote",
+        backend=cfg.diarization_backend,
     )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
