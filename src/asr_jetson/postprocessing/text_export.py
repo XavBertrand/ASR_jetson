@@ -123,3 +123,26 @@ def write_single_block_per_speaker_txt(
         else:
             lines.append(f"{tag}: {para}\n")
     out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+def write_dialogue_txt(segments, path, one_based=True):
+    """
+    Écrit:
+    SPEAKER_1 : bonjour !!
+    SPEAKER_2 : Bonjour, comment vas-tu ?
+    ...
+    """
+    segments_sorted = sorted(
+        segments,
+        key=lambda s: (float(s.get("start", 0.0)), float(s.get("end", 0.0)))
+    )
+    lines = []
+    for seg in segments_sorted:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        spk = int(seg.get("speaker", 0))
+        if one_based:
+            spk += 1  # SPEAKER_1, SPEAKER_2, ... (au lieu de 0/1)
+        lines.append(f"SPEAKER_{spk} : {text}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
