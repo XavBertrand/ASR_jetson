@@ -87,7 +87,7 @@ def apply_diarization(
     audio_path: str | Path,
     n_speakers: int = 2,
     device: str = "cuda",
-    clustering_method: Literal["spectral", "kmeans"] = "spectral",
+    clustering_method: str = "ahc_viterbi",
     backend: str = "pyannote",  # titanet or ecapa ou pyannote
 ) -> List[Dict]:
     """

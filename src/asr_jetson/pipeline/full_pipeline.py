@@ -53,7 +53,7 @@ class PipelineConfig:
     denoise: bool = False             # applique RNNoise/afftdn
     device: str = "cpu"              # "cpu" | "cuda"
     n_speakers: int = 2
-    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical"
+    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical" | "ahc_viterbi"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
     vad_min_chunk_s: float = 0.5
     whisper_model: str = "medium"      # tiny/base/small/...
@@ -154,9 +154,10 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
 
-    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + ".json")
-    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + ".srt")
-    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
+    tag = f"_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}"
+    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
+    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
+    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")
 
     # pour le SRT : array avec secondes & string speaker
     srt_payload = [

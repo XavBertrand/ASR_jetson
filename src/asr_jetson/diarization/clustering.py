@@ -8,7 +8,220 @@ from sklearn.cluster import SpectralClustering, KMeans, AgglomerativeClustering
 from sklearn.decomposition import PCA
 from scipy.signal import medfilt
 
+from dataclasses import dataclass
+from typing import Tuple, Sequence
+from sklearn.metrics import silhouette_score
+from math import log
+import numpy as np
+
+
 DiarizerMethod = Literal["spectral", "kmeans", "hierarchical"]
+
+def _safe_cosine_distance_matrix(X: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """
+    Calcule une matrice de distance cosinus robuste aux vecteurs nuls.
+    - Si l'un des deux vecteurs est nul (norme < eps), on met sim=0 (donc dist=1),
+      sauf sur la diagonale (dist=0).
+    """
+    X = np.asarray(X, dtype=np.float32)
+    n = X.shape[0]
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    valid = (norms > eps).astype(np.float32)
+    # normalisation sûre (évite division par zéro)
+    Xn = X / np.maximum(norms, eps)
+
+    # similarités valides
+    S = Xn @ Xn.T  # [-1..1]
+    # paires invalides (au moins un zéro) -> sim=0
+    mask_invalid = (valid @ valid.T) < 1.0
+    S[mask_invalid] = 0.0
+
+    # distance = 1 - sim, diag=0
+    D = 1.0 - S
+    np.fill_diagonal(D, 0.0)
+    return D
+
+# --- AJOUT: petite utilité ---
+def _cosine_distance_matrix(X: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    S = _cosine_similarity_matrix(X, eps=eps)
+    D = 1.0 - S
+    np.fill_diagonal(D, 0.0)
+    return D
+
+@dataclass
+class AHCParams:
+    linkage: str = "average"
+    # si n_speakers non fourni, on coupe le dendrogramme par seuil
+    distance_threshold: Optional[float] = None  # e.g. 0.35–0.55 (à tuner)
+
+# --- AJOUT: coupe AHC par seuil OU sélection auto du seuil ---
+def _ahc_with_threshold(
+    X: np.ndarray,
+    n_speakers: Optional[int] = None,
+    distance_threshold: Optional[float] = None,
+    linkage: str = "average",
+) -> np.ndarray:
+    """
+    AHC cosine + linkage average. Si distance_threshold est fourni ET n_speakers=None,
+    on laisse sklearn déterminer les clusters par coupe du dendrogramme.
+    """
+    # on pré-calcule une matrice de distances cosinus "safe"
+    D = _safe_cosine_distance_matrix(X)
+    kwargs = dict(linkage=linkage, metric="precomputed")
+
+    if distance_threshold is not None and n_speakers is None:
+        agg = AgglomerativeClustering(n_clusters=None, distance_threshold=distance_threshold, **kwargs)
+        return agg.fit_predict(D).astype(int)
+    else:
+        agg = AgglomerativeClustering(n_clusters=n_speakers, **kwargs)
+        return agg.fit_predict(D).astype(int)
+
+# --- AJOUT: recherche de seuil "auto" (silhouette sur coupes candidates) ---
+def _auto_threshold_via_silhouette(
+    X: np.ndarray,
+    candidates: Sequence[float] = (0.35, 0.4, 0.45, 0.5, 0.55),
+    min_clusters: int = 2,
+    max_clusters: int = 8,
+) -> float:
+    """
+    Balaye des seuils de distance cosine, retient celui qui maximise la silhouette
+    (et qui produit un nombre sensé de clusters).
+    """
+    best_thr, best_score = None, -1.0
+    for thr in candidates:
+        labels = _ahc_with_threshold(X, n_speakers=None, distance_threshold=thr)
+        k = len(np.unique(labels))
+        if k < min_clusters or k > max_clusters:
+            continue
+        try:
+            # score = silhouette_score(X, labels, metric="cosine")
+            # filtre vecteurs non nuls
+            eps = 1e-8
+            norms = np.linalg.norm(X, axis=1)
+            valid_idx = np.where(norms > eps)[0]
+            if len(valid_idx) < 2 or len(np.unique(labels)) < 2:
+                continue
+            Xv = X[valid_idx] / norms[valid_idx, None]
+            lv = labels[valid_idx]
+            score = silhouette_score(Xv, lv, metric="cosine")
+
+
+        except Exception:
+            continue
+        if score > best_score:
+            best_score, best_thr = score, thr
+    # fallback raisonnable
+    return best_thr if best_thr is not None else 0.45
+
+# --- AJOUT: ré-segmentation Viterbi (mono-speaker par frame/segment) ---
+def _viterbi_rescore(
+    X: np.ndarray,
+    labels: np.ndarray,
+    penalty_switch: float = 3.0,
+    temperature: float = 0.2,
+) -> np.ndarray:
+    """
+    Ré-segmentation légère:
+    - on calcule des centroides par cluster initial
+    - score d’émission = sim_cosine(x, centroid[label]) / temperature
+    - coût de transition: +penalty_switch quand on change de label
+    Viterbi renvoie une séquence de labels plus lisse et cohérente temporellement.
+    """
+    X = np.asarray(X, dtype=np.float32)
+    labels = np.asarray(labels, dtype=int)
+    K = int(labels.max()) + 1
+
+    # centroids
+    cents = np.zeros((K, X.shape[1]), dtype=np.float32)
+    for k in range(K):
+        idx = np.where(labels == k)[0]
+        if len(idx) == 0:
+            cents[k] = 0.0
+        else:
+            v = X[idx].mean(axis=0)
+            n = np.linalg.norm(v) + 1e-8
+            cents[k] = v / n
+
+    # logits d’émission: sim_cosine(x, centroids)
+    Xn = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
+    emis = Xn @ cents.T  # [T, K]
+    emis = emis / max(1e-6, temperature)
+
+    T = X.shape[0]
+    dp = np.full((T, K), -1e9, dtype=np.float32)
+    bk = np.full((T, K), -1, dtype=np.int32)
+
+    # init
+    dp[0] = emis[0]
+
+    # dyn prog
+    for t in range(1, T):
+        for j in range(K):
+            # rester sur j
+            stay = dp[t-1, j]
+            # venir d’un autre i
+            change = dp[t-1] - penalty_switch
+            prev = np.maximum(stay, change.max())
+            dp[t, j] = emis[t, j] + prev
+            bk[t, j] = int(stay >= change.max()) and j or int(np.argmax(dp[t-1]))
+
+    # backtrace
+    y = np.zeros(T, dtype=int)
+    y[-1] = int(np.argmax(dp[-1]))
+    for t in range(T-2, -1, -1):
+        y[t] = bk[t+1, y[t+1]]
+    return y
+
+# --- AJOUT: fusion des labels consécutifs identiques ---
+def merge_consecutive_labels(labels: np.ndarray) -> np.ndarray:
+    return labels  # (tes exports par tours font déjà la fusion au moment de l’écriture)
+
+# --- AJOUT PRINCIPAL: mode "ahc_viterbi" ---
+def cluster_embeddings_pyannote_like(
+    embeddings: np.ndarray,
+    n_speakers: Optional[int] = None,
+    ahc_params: Optional[AHCParams] = None,
+    auto_threshold: bool = True,
+    viterbi: bool = True,
+    penalty_switch: float = 3.0,
+    temperature: float = 0.2,
+    pca_dim: Optional[int] = None,
+    random_state: int = 0,
+) -> np.ndarray:
+    """
+    Pipeline clustering + ré-segmentation "pyannote-like":
+    1) AHC global (cosine, linkage average) avec seuil (ou n_speakers si imposé)
+    2) Viterbi resegmentation avec pénalité de switch
+    """
+    if embeddings is None or len(embeddings) == 0:
+        return np.array([], dtype=int)
+
+    X = embeddings
+    if pca_dim is not None and pca_dim > 0 and X.shape[1] > pca_dim:
+        try:
+            X = PCA(n_components=pca_dim, random_state=random_state).fit_transform(X)
+        except Exception:
+            X = embeddings
+
+    if ahc_params is None:
+        ahc_params = AHCParams()
+
+    # Seuil auto si demandé et n_speakers pas imposé
+    thr = ahc_params.distance_threshold
+    if auto_threshold and n_speakers is None:
+        thr = _auto_threshold_via_silhouette(X)
+
+    labels0 = _ahc_with_threshold(
+        X, n_speakers=n_speakers, distance_threshold=thr, linkage=ahc_params.linkage
+    )
+
+    if viterbi and len(np.unique(labels0)) >= 2:
+        labels = _viterbi_rescore(X, labels0, penalty_switch=penalty_switch, temperature=temperature)
+    else:
+        labels = labels0
+
+    return labels.astype(int)
+
 
 
 def _cosine_similarity_matrix(
@@ -112,6 +325,20 @@ def cluster_embeddings(
     if method == "kmeans":
         km = KMeans(n_clusters=n_speakers, n_init=10, random_state=random_state)
         labels = km.fit_predict(X)
+        return labels.astype(int)
+
+    if method == "ahc_viterbi":
+        labels = cluster_embeddings_pyannote_like(
+            embeddings,
+            n_speakers=n_speakers if n_speakers > 0 else None,  # None => seuil auto
+            ahc_params=AHCParams(linkage="average", distance_threshold=None),  # on laissera auto
+            auto_threshold=(n_speakers <= 0 or n_speakers is None),
+            viterbi=True,
+            penalty_switch=3.0,
+            temperature=0.2,
+            pca_dim=pca_dim,
+            random_state=random_state,
+        )
         return labels.astype(int)
 
     # === HIERARCHICAL : CORRIGÉ ===
