@@ -38,6 +38,7 @@ def test_full_pipeline_end_to_end(tmp_path):
         whisper_compute="int8_float16",  # <--- clé : compatible CUDA
         language=None,
         out_dir=out_dir,
+        diarization_backend="titanet",
     )
 
     # Run

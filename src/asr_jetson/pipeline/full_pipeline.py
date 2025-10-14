@@ -10,6 +10,7 @@ from typing import List, Dict, Optional
 # === Imports de tes modules existants ===
 # Denoise
 from asr_jetson.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
+from asr_jetson.preprocessing.convert_to_wav import convert_to_wav
 # VAD
 # Diarization
 from asr_jetson.diarization.pipeline_diarization import apply_diarization
@@ -17,7 +18,7 @@ from asr_jetson.diarization.pipeline_diarization import apply_diarization
 from asr_jetson.asr.whisper_engine import load_faster_whisper
 from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
-from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt
+from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 
 # --- Helpers ---
@@ -52,7 +53,7 @@ class PipelineConfig:
     denoise: bool = False             # applique RNNoise/afftdn
     device: str = "cpu"              # "cpu" | "cuda"
     n_speakers: int = 2
-    clustering_method: str = "spectral"      # "spectral" | "kmeans"
+    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
     vad_min_chunk_s: float = 0.5
     whisper_model: str = "medium"      # tiny/base/small/...
@@ -60,6 +61,7 @@ class PipelineConfig:
     whisper_compute: str = "int8"      # int8 / int8_float16 / float16 / float32
     language: Optional[str] = None     # None = auto
     out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
+    diarization_backend: str = "titanet"
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
@@ -92,6 +94,9 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
 
     src_audio = Path(audio_path)
 
+    # convert to wav
+    src_audio = convert_to_wav(src_audio)
+
     # 0) (optionnel) Denoise -> wav propre
     if cfg.denoise:
         denoised_wav = cfg.out_dir / "intermediate" / (src_audio.stem + "_denoised.wav")
@@ -110,6 +115,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         n_speakers=cfg.n_speakers,
         device=device,
         clustering_method=cfg.clustering_method,
+        backend=cfg.diarization_backend,
     )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
@@ -200,14 +206,19 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
 
     out_txt.parent.mkdir(parents=True, exist_ok=True)
 
-    write_single_block_per_speaker_txt(
-        labeled_for_txt,
-        out_path=out_txt,
-        header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (ligne titre)
-    )
+    # write_single_block_per_speaker_txt(
+    #     labeled_for_txt,
+    #     out_path=out_txt,
+    #     header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (ligne titre)
+    # )
+    write_dialogue_txt(labeled_for_txt, out_txt)
 
     # === NOUVEAU : post-correction LLM -> n'écrase pas le .txt original ===
-    out_txt_clean = root_dir / cfg.out_dir / "txt" / "test_clean.txt"
+
+    pp, ff = os.path.split(out_txt)
+    ff, ee = os.path.splitext(ff)
+
+    out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
     clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     return {

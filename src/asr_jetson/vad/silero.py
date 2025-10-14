@@ -100,8 +100,8 @@ def apply_vad(
     sample_rate: int = 16000,
     *,
     threshold: float = 0.5,
-    min_silence_duration_ms: int = 300,  # ↑ pour MERGER davantage (ex: 300–600)
-    speech_pad_ms: int = 20,             # ↓ pour réduire l’OVERLAP (ex: 10–30)
+    min_silence_duration_ms: int = 150,  # ↑ pour MERGER davantage (ex: 300–600)
+    speech_pad_ms: int = 40,             # ↓ pour réduire l’OVERLAP (ex: 10–30)
     window_size_samples: int = 512,      # défaut Silero (10–40 ms selon sr)
     return_seconds: bool = True,         # pratique pour aligner avec Whisper
 ) -> List[Dict[str, Any]]:

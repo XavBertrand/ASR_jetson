@@ -51,16 +51,28 @@ def transcribe_full(model, wav_path, language=None):
     """
     segments, info = model.transcribe(
         wav_path,
-        language=language,     # None = auto
+        language=language or "fr",  # force FR si tu sais que c’est du français
         task="transcribe",
-        vad_filter=False,      # on a déjà fait la VAD en amont
-        chunk_length=30,       # garde petit pour la stabilité WSL2 si besoin
+        # Laisse faster-whisper appliquer sa VAD interne, ça casse souvent les boucles :
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=300),
+        # Découpage plus court → moins de drift :
+        chunk_length=20,
         word_timestamps=False,
-        beam_size=5,  # beam search (meilleure ponctuation/capitales)
-        temperature=[0.0, 0.2, 0.4],  # beam = 0.0 => déterministe
-        condition_on_previous_text=True,  # conserve le contexte entre chunks
-        compression_ratio_threshold=2.4,  # garde-fous texte dégénéré
-        initial_prompt="Ponctue correctement en français (., ; : ! ?), garde les nombres et noms propres."
+
+        # Beam search "froid" pour éviter la dérive
+        beam_size=5,
+        temperature=0.0,  # pas de sampling
+        # ne PAS conditionner sur le texte précédent (source majeure de répétitions)
+        condition_on_previous_text=False,
+
+        # Garde-fous anti-hallucination / répétition
+        compression_ratio_threshold=2.4,
+        no_speech_threshold=0.6,
+        log_prob_threshold=-1.0,
+
+        # (facultatif) prompt plus neutre
+        initial_prompt=None,
     )
     out = []
     for s in segments:

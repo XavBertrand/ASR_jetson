@@ -56,6 +56,8 @@ dependencies = [
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
+  "speechbrain>=1.0.3",
+  "pyannote-audio>=3.1",
 ]
 
 [project.optional-dependencies]

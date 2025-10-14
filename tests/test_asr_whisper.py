@@ -21,7 +21,7 @@ def test_asr_on_real_file_and_attach_speakers():
 
     # 1) diarisation -> segments + speakers
     try:
-        diar = apply_diarization(audio, n_speakers=1, device="cuda", clustering_method="spectral")
+        diar = apply_diarization(audio, n_speakers=1, device="cuda", clustering_method="spectral", backend="titanet")
     except FileNotFoundError as e:
         pytest.skip(f"TitaNet indisponible : {e}")
 

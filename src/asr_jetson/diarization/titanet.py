@@ -7,6 +7,12 @@ import torchaudio
 import nemo.collections.asr as nemo_asr
 from pathlib import Path
 
+try:
+    from speechbrain.inference import EncoderClassifier
+    _HAS_SPEECHBRAIN = True
+except Exception:
+    _HAS_SPEECHBRAIN = False
+
 # # Conserve la compat compat tests (PROJECT_ROOT vient de tests/conftest)
 # try:
 #     from tests.conftest import PROJECT_ROOT  # type: ignore
@@ -14,6 +20,25 @@ from pathlib import Path
 #     PROJECT_ROOT = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+class ECAPAWrapper(torch.nn.Module):
+    def __init__(self, device="cpu"):
+        super().__init__()
+        self.device = device
+        self.classifier = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            run_opts={"device": device}
+        )
+
+    @torch.inference_mode()
+    def forward(self, input_signal: torch.Tensor, input_signal_length: torch.Tensor):
+        # input_signal: (B, T) mono @16k
+        # SpeechBrain attend (B, T), retourne (B, 192)
+        # encode_batch normalise en interne; on reste en fp32
+        emb = self.classifier.encode_batch(input_signal)
+        # encode_batch -> (B, 1, D), squeeze le canal
+        emb = emb.squeeze(1)  # (B, D)
+        return emb
 
 def _model_search_dirs(env_dir: Optional[str] = None) -> list[Path]:
     """
@@ -42,7 +67,7 @@ def load_titanet(
     device: str = "cpu",
     local_model: Optional[str] = None,
     local_dir: Optional[str] = None,
-    filename: str = "titanet_s.nemo",
+    filename: str = "titanet_large.nemo",
     allow_downloads: Optional[bool] = None,
     model_name: Optional[str] = None,
 ):
@@ -100,6 +125,7 @@ def load_titanet(
         "titanet_large_512",
         "ecapa_tdnn",            # fallback plausible si pas de TitaNet
         "ecapa_tdnn_small",
+
     ]
 
     # on dédupliques en gardant l’ordre
@@ -183,9 +209,9 @@ def load_titanet(
         )
 
 
-
 def _l2_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """Normalisation L2 par vecteur (N, D) -> (N, D)."""
+    x = x - x.mean(dim=0, keepdim=True)
     denom = torch.clamp(torch.norm(x, p=2, dim=-1, keepdim=True), min=eps)
     return x / denom
 
@@ -198,56 +224,80 @@ def extract_embeddings(
     batch_size: int = 16,
     min_len_samples: int = 1600,  # ~0.1s à 16k
     l2_normalize: bool = True,
+    # --- AJOUT : fenêtrage interne optionnel ---
+    win_sec: Optional[float] = 1.5,
+    hop_sec: Optional[float] = 0.75,
 ) -> np.ndarray:
-    """
-    Extrait des embeddings TitaNet pour une liste de segments (indices en samples @16k).
-
-    - Lit/convertit l'audio en mono/16k si besoin.
-    - Batcher les segments avec padding dynamique et lengths.
-    - Normalise L2 les embeddings (optionnel).
-
-    Returns:
-        numpy array (num_segments, emb_dim) — peut être vide (0, D).
-    """
     waveform, sr = torchaudio.load(wav_path)
     if sr != 16000:
         waveform = torchaudio.functional.resample(waveform, sr, 16000)
         sr = 16000
 
-    # Mono sûr
     if waveform.ndim > 1 and waveform.shape[0] > 1:
         waveform = torch.mean(waveform, dim=0, keepdim=True)
 
     signal = waveform.to(device)
 
-    # Clamp + padding éventuel des segments très courts
     chunks: List[torch.Tensor] = []
     lengths: List[int] = []
 
     sig_len = int(signal.shape[1])
+
+    # --- AJOUT : pré-calc des pas de fenêtre (si activé) ---
+    use_sliding = (win_sec is not None) and (hop_sec is not None) and (win_sec > 0) and (hop_sec > 0)
+    if use_sliding:
+        win = int(win_sec * 16000)
+        hop = int(hop_sec * 16000)
+
     for seg in segments:
         start, end = int(seg["start"]), int(seg["end"])
         start = max(0, min(start, sig_len))
         end = max(0, min(end, sig_len))
-
         if end <= start:
             continue
 
-        chunk = signal[:, start:end]
-        if chunk.shape[1] < min_len_samples:
-            pad = min_len_samples - chunk.shape[1]
-            chunk = torch.nn.functional.pad(chunk, (0, pad))
+        if not use_sliding:
+            # Comportement d'origine : 1 embedding par segment
+            chunk = signal[:, start:end]
+            if chunk.shape[1] < min_len_samples:
+                pad = min_len_samples - chunk.shape[1]
+                chunk = torch.nn.functional.pad(chunk, (0, pad))
+            chunks.append(chunk.squeeze(0))
+            lengths.append(int(chunk.shape[1]))
+        else:
+            # Fenêtre glissante à l'intérieur du segment
+            seg_len = end - start
+            if seg_len <= 0:
+                continue
 
-        # TitaNet attend [B, T], on s'assure d'un batch plus tard
-        # Ici chunk est [1, T], c'est parfait
-        chunks.append(chunk.squeeze(0))  # (T,)
-        lengths.append(int(chunk.shape[1]))
+            # Cas très court : une seule fenêtre (pad si besoin)
+            if seg_len < max(min_len_samples, win):
+                chunk = signal[:, start:end]
+                if chunk.shape[1] < min_len_samples:
+                    pad = min_len_samples - chunk.shape[1]
+                    chunk = torch.nn.functional.pad(chunk, (0, pad))
+                chunks.append(chunk.squeeze(0))
+                lengths.append(int(chunk.shape[1]))
+                continue
+
+            # Génère les sous-fenêtres start->end avec hop
+            sub_starts = list(range(start, end - win + 1, hop))
+            # Assure une fenêtre couvrant la fin
+            if not sub_starts or sub_starts[-1] + win < end:
+                sub_starts.append(max(start, end - win))
+
+            for s0 in sub_starts:
+                s1 = min(s0 + win, end)
+                chunk = signal[:, s0:s1]
+                if chunk.shape[1] < min_len_samples:
+                    pad = min_len_samples - chunk.shape[1]
+                    chunk = torch.nn.functional.pad(chunk, (0, pad))
+                chunks.append(chunk.squeeze(0))
+                lengths.append(int(chunk.shape[1]))
 
     if not chunks:
-        # Taille d'embedding connue de TitaNet-S : 192
         return np.zeros((0, 192), dtype=np.float32)
 
-    # Batching avec padding max_len par batch
     embeddings_all: List[np.ndarray] = []
     model.eval()
     with torch.inference_mode():
@@ -256,20 +306,16 @@ def extract_embeddings(
             batch_len = lengths[i : i + batch_size]
 
             max_len = max(batch_len)
-            # Empile en [B, T] avec padding right
             padded = torch.stack(
                 [torch.nn.functional.pad(x, (0, max_len - x.shape[0])) for x in batch_sig],
                 dim=0,
-            ).to(device)  # (B, T)
+            ).to(device)
 
             len_tensor = torch.tensor(batch_len, device=device, dtype=torch.int64)
 
-            # forward -> tuple(embeddings, ...) parfois ; on récupère le 1er
             out = model.forward(input_signal=padded, input_signal_length=len_tensor)
             if isinstance(out, tuple):
                 out = out[0]
-
-            # out attendu [B, D]
             if out.ndim == 1:
                 out = out.unsqueeze(0)
 

@@ -4,81 +4,89 @@ from __future__ import annotations
 import numpy as np
 from typing import Literal, Optional
 
-from sklearn.cluster import SpectralClustering, KMeans
+from sklearn.cluster import SpectralClustering, KMeans, AgglomerativeClustering
 from sklearn.decomposition import PCA
+from scipy.signal import medfilt
 
-DiarizerMethod = Literal["spectral", "kmeans"]
+DiarizerMethod = Literal["spectral", "kmeans", "hierarchical"]
 
 
 def _cosine_similarity_matrix(
-    X: np.ndarray,
-    eps: float = 1e-8,
-    dtype: type = np.float32,
+        X: np.ndarray,
+        eps: float = 1e-8,
+        dtype: type = np.float32,
 ) -> np.ndarray:
-    """
-    Calcule une matrice de similarité cosinus (n x n) robuste.
-
-    - Normalisation L2 avec epsilon pour éviter divisions par zéro.
-    - Nettoyage NaN/Inf -> 0.
-    - Clamp [-1, 1] pour stabilité num.
-    - Diagonale = 1.
-
-    Args:
-        X: (num_chunks, emb_dim) embeddings.
-        eps: petit terme de stabilité lors de la normalisation.
-        dtype: dtype cible pour économiser mémoire (float32 par défaut).
-
-    Returns:
-        S: (num_chunks, num_chunks) en 'dtype'.
-    """
+    """Calcule une matrice de similarité cosinus robuste."""
     if X.ndim != 2:
         raise ValueError("embeddings must be a 2D array [num_chunks, emb_dim]")
 
     X = X.astype(dtype, copy=False)
-
-    # Normalisation L2 sécurisée
     norms = np.linalg.norm(X, axis=1, keepdims=True)
     norms = np.maximum(norms, eps)
     Xn = X / norms
 
-    # Similarité cosinus
     S = Xn @ Xn.T
-
-    # Nettoyage / Clamp / Diagonale
     S = np.nan_to_num(S, nan=0.0, posinf=0.0, neginf=0.0)
     np.clip(S, -1.0, 1.0, out=S)
     np.fill_diagonal(S, 1.0)
     return S
 
 
+def _segments_from_labels(lbls):
+    segs = []
+    if len(lbls) == 0: return segs
+    cur_l, cur_s = lbls[0], 0
+    for i, l in enumerate(lbls[1:], 1):
+        if l != cur_l:
+            segs.append([cur_s, i, cur_l])
+            cur_l, cur_s = l, i
+    segs.append([cur_s, len(lbls), cur_l])
+    return segs
+
+
+def smooth_labels(labels, win_sec=1.5, hop_sec=2.0, min_dur_sec=1.0):
+    """Lissage OPTIONNEL - désactiver si les résultats sont meilleurs sans."""
+    # Filtre médian très léger (kernel=3 au lieu de 5)
+    labels = medfilt(labels, kernel_size=3)
+    min_len_frames = max(1, int((min_dur_sec - (win_sec - hop_sec)) / hop_sec))
+
+    segs = _segments_from_labels(labels.copy())
+    for k in range(len(segs)):
+        s, e, l = segs[k]
+        if (e - s) < min_len_frames:
+            if k == 0:
+                segs[k][2] = segs[k + 1][2]
+            elif k == len(segs) - 1:
+                segs[k][2] = segs[k - 1][2]
+            else:
+                lprev = segs[k - 1][2]
+                lnext = segs[k + 1][2]
+                segs[k][2] = lprev if (segs[k - 1][1] - segs[k - 1][0]) >= (segs[k + 1][1] - segs[k + 1][0]) else lnext
+
+    labels_smooth = np.empty_like(labels)
+    for s, e, l in segs:
+        labels_smooth[s:e] = l
+
+    return labels_smooth
+
+
 def cluster_embeddings(
-    embeddings: np.ndarray,
-    n_speakers: int,
-    method: DiarizerMethod = "spectral",
-    spectral_assign_labels: Literal["kmeans", "cluster_qr"] = "kmeans",
-    random_state: int = 0,
-    pca_dim: Optional[int] = None,
+        embeddings: np.ndarray,
+        n_speakers: int,
+        method: DiarizerMethod = "spectral",
+        spectral_assign_labels: Literal["kmeans", "cluster_qr"] = "kmeans",
+        random_state: int = 0,
+        pca_dim: Optional[int] = None,
+        apply_smoothing: bool = False,  # NOUVEAU : désactive par défaut
 ) -> np.ndarray:
     """
     Regroupe des embeddings en `n_speakers` clusters.
 
-    - method="spectral": SpectralClustering(affinity='precomputed', assign_labels=...)
-                         sur une matrice de similarité cosinus robuste.
-    - method="kmeans":   KMeans directement sur les embeddings.
-
-    Paramètres:
-        embeddings      : np.ndarray (num_chunks, emb_dim)
-        n_speakers      : nombre de locuteurs (>= 1)
-        method          : "spectral" | "kmeans"
-        spectral_assign_labels : 'kmeans' (défaut) ou 'cluster_qr'
-        random_state    : graine déterministe
-        pca_dim         : si défini, PCA -> réduction à pca_dim avant clustering
-                          (utile pour du bruit de haute dimension)
-
-    Retour:
-        labels: np.ndarray (num_chunks,) d'indices de clusters int.
+    CHANGEMENT CLÉ :
+    - Hierarchical clustering corrigé (affinity='cosine' sur embeddings, pas sur similarité)
+    - Lissage désactivé par défaut (apply_smoothing=False)
     """
-    # Cas vides / triviaux
+    # Cas triviaux
     if embeddings is None or len(embeddings) == 0:
         return np.array([], dtype=int)
     if n_speakers <= 0:
@@ -89,39 +97,64 @@ def cluster_embeddings(
     if n_speakers == 1:
         return np.zeros(n_samples, dtype=int)
     if n_samples < n_speakers:
-        # Pas assez de segments -> chacun son cluster
         return np.arange(n_samples, dtype=int)
 
     X = embeddings
-    # Optionnel : réduction de dimension (stabilise parfois Spectral)
+
+    # PCA optionnel
     if pca_dim is not None and pca_dim > 0 and X.shape[1] > pca_dim:
         try:
             X = PCA(n_components=pca_dim, random_state=random_state).fit_transform(X)
         except Exception:
-            # PCA facultative : en cas d'échec, on continue sans
             X = embeddings
 
+    # === KMEANS : simple et efficace ===
     if method == "kmeans":
-        km = KMeans(n_clusters=n_speakers, n_init="auto", random_state=random_state)
-        return km.fit_predict(X)
+        km = KMeans(n_clusters=n_speakers, n_init=10, random_state=random_state)
+        labels = km.fit_predict(X)
+        return labels.astype(int)
 
-    # --- method == "spectral" ---
+    # === HIERARCHICAL : CORRIGÉ ===
+    if method == "hierarchical":
+        try:
+            # AgglomerativeClustering avec affinity='cosine' sur les EMBEDDINGS directement
+            agg = AgglomerativeClustering(
+                n_clusters=n_speakers,
+                metric='cosine',  # ou affinity='cosine' selon ta version sklearn
+                linkage='average'
+            )
+            labels = agg.fit_predict(X)
+
+            # Lissage OPTIONNEL
+            if apply_smoothing:
+                labels = smooth_labels(labels)
+
+            return labels.astype(int)
+        except Exception as e:
+            print(f"[WARN] Hierarchical clustering failed: {e}, falling back to KMeans")
+            km = KMeans(n_clusters=n_speakers, n_init=10, random_state=random_state)
+            return km.fit_predict(X).astype(int)
+
+    # === SPECTRAL : meilleur pour les cas complexes ===
     S = _cosine_similarity_matrix(X)
 
-    # SpectralClustering est parfois sensible numériquement ; paramètres un peu plus stables
     try:
         sc = SpectralClustering(
             n_clusters=n_speakers,
             affinity="precomputed",
             assign_labels=spectral_assign_labels,
             random_state=random_state,
-            # n_init est utilisé côté assign_labels='kmeans' (>=1.3); ignoré sinon
-            n_init=10 if spectral_assign_labels == "kmeans" else None,
-            eigen_solver="arpack",  # généralement stable pour petites tailles
+            n_init=10,
+            eigen_solver="arpack",
         )
         labels = sc.fit_predict(S)
-        return labels.astype(int, copy=False)
-    except Exception:
-        # Fallback robuste : KMeans direct si Spectral échoue (NaN, graph déconnecté, etc.)
-        km = KMeans(n_clusters=n_speakers, n_init="auto", random_state=random_state)
-        return km.fit_predict(X).astype(int, copy=False)
+
+        # Lissage OPTIONNEL
+        if apply_smoothing:
+            labels = smooth_labels(labels)
+
+        return labels.astype(int)
+    except Exception as e:
+        print(f"[WARN] Spectral clustering failed: {e}, falling back to KMeans")
+        km = KMeans(n_clusters=n_speakers, n_init=10, random_state=random_state)
+        return km.fit_predict(X).astype(int)

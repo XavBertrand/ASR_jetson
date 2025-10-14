@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 import soundfile as sf
 import gc, torch
 
 from src.asr_jetson.vad.silero import load_silero_vad, apply_vad
-from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings
+from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings, ECAPAWrapper
 from src.asr_jetson.diarization.clustering import cluster_embeddings
+
+hf_token = os.getenv("HUGGINGFACE_TOKEN")
 
 
 def _ensure_seconds(diar_segments, wav_path, sr_hint=16000):
@@ -37,12 +39,56 @@ def _ensure_seconds(diar_segments, wav_path, sr_hint=16000):
             d["end"] = float(d["end"]) / sr
     return diar_segments
 
+def _pyannote_diar(wav_path: str, n_speakers: Optional[int], device: str = "cpu"):
+    from pyannote.audio import Pipeline
+    import torch
+
+    # Charge le pipeline pré-entraîné (nécessite token HF valide)
+    # Choix courant : "pyannote/speaker-diarization-3.1"
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+    pipeline.to(torch.device("cuda" if (device.startswith("cuda") and torch.cuda.is_available()) else "cpu"))
+
+    # Appel : avec ou sans contrainte de nb de speakers
+    if n_speakers and n_speakers > 0:
+        diar = pipeline({"audio": wav_path}, num_speakers=n_speakers)
+    else:
+        diar = pipeline({"audio": wav_path})
+
+    # Convertir en liste de dicts {start,end,speaker}
+    # pyannote renvoie une Annotation (segments + labels)
+    results = []
+    label_map = {}  # map label pyannote -> int
+    next_id = 0
+
+    for segment, _, label in diar.itertracks(yield_label=True):
+        lab = str(label)
+        # si c'est déjà un nombre ("0", "1"), conserve l'entier
+        if lab.isdigit():
+            spk = int(lab)
+        else:
+            # sinon mappe de façon déterministe à 0..N-1
+            if lab not in label_map:
+                label_map[lab] = next_id
+                next_id += 1
+            spk = label_map[lab]
+
+        results.append({
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "speaker": int(spk),  # <- toujours un int
+        })
+
+    # Tri chronologique (sécurité)
+    results.sort(key=lambda s: (s["start"], s["end"]))
+    return results
+
 
 def apply_diarization(
     audio_path: str | Path,
     n_speakers: int = 2,
     device: str = "cuda",
     clustering_method: Literal["spectral", "kmeans"] = "spectral",
+    backend: str = "pyannote",  # titanet or ecapa ou pyannote
 ) -> List[Dict]:
     """
     Pipeline: VAD -> embeddings TitaNet-S -> clustering -> segments étiquetés.
@@ -51,6 +97,11 @@ def apply_diarization(
       { 'start': int, 'end': int, 'speaker': int }
     Les temps sont en échantillons à 16 kHz (cohérents avec la VAD et TitaNet).
     """
+    if backend == "pyannote":
+        return _pyannote_diar(audio_path, n_speakers, device=device)
+    else:
+        pass
+
     # 1) VAD sur un mono/16 kHz (apply_vad gère la lecture et resample si besoin)
     audio_path = str(Path(audio_path))
     vad_model, _ = load_silero_vad()
@@ -61,7 +112,12 @@ def apply_diarization(
 
     # 2) Embeddings TitaNet-S (cherche d’abord localement)
     local_dir = os.getenv("ASR_NEMO_DIR", str(Path(__file__).resolve().parents[3] / "models" / "nemo"))
-    spk_model = load_titanet(device=device, local_dir=local_dir)  # .eval() déjà appliqué
+
+    if backend.lower() == "ecapa":
+        spk_model = ECAPAWrapper(device=device).to(device)
+    else:
+        spk_model = load_titanet(device=device, local_dir=local_dir)  # .eval() déjà appliqué
+
     embeddings = extract_embeddings(spk_model, audio_path, vad_segments, device=device)
 
     if embeddings is None or len(embeddings) == 0:

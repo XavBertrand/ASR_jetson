@@ -123,3 +123,61 @@ def write_single_block_per_speaker_txt(
         else:
             lines.append(f"{tag}: {para}\n")
     out_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+
+def write_dialogue_txt(segments, path, one_based=True):
+    """
+    Écrit un dialogue en blocs continus :
+    SPEAKER_1 : phrase 1 ... phrase n
+    SPEAKER_2 : phrase 1 ... phrase m
+    ...
+    """
+    import re
+    # 1) tri chrono
+    segments_sorted = sorted(
+        segments,
+        key=lambda s: (float(s.get("start", 0.0)), float(s.get("end", 0.0)))
+    )
+
+    # 2) agrégation par tours de parole (consécutifs)
+    blocks = []              # [(spk_int(1-based), "texte agrégé"), ...]
+    cur_spk = None
+    cur_text_parts = []
+
+    for seg in segments_sorted:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+
+        spk = int(seg.get("speaker", 0))
+        if one_based:
+            spk += 1  # SPEAKER_1, SPEAKER_2, ...
+
+        if cur_spk is None:
+            # premier segment
+            cur_spk = spk
+            cur_text_parts = [text]
+        elif spk == cur_spk:
+            # même speaker : on concatène
+            cur_text_parts.append(text)
+        else:
+            # speaker change : on "flush" le bloc précédent
+            blocks.append((cur_spk, " ".join(cur_text_parts)))
+            cur_spk = spk
+            cur_text_parts = [text]
+
+    # flush final
+    if cur_text_parts:
+        blocks.append((cur_spk, " ".join(cur_text_parts)))
+
+    # 3) petit nettoyage espaces/ponctuation
+    def _normalize(s: str) -> str:
+        s = re.sub(r"\s+", " ", s)                 # espaces multiples -> simple
+        s = re.sub(r"\s+([,.;:!?])", r"\1", s)     # pas d’espace avant ponctuation forte
+        s = re.sub(r"([,.;:!?])(?=\S)", r"\1 ", s) # espace après ponctuation si manquante
+        return s.strip()
+
+    lines = [f"SPEAKER_{spk} : {_normalize(txt)}" for spk, txt in blocks]
+
+    # 4) écriture
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
