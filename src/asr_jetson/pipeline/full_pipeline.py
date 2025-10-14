@@ -214,7 +214,11 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     write_dialogue_txt(labeled_for_txt, out_txt)
 
     # === NOUVEAU : post-correction LLM -> n'écrase pas le .txt original ===
-    out_txt_clean = root_dir / cfg.out_dir / "txt" / "test_clean.txt"
+
+    pp, ff = os.path.split(out_txt)
+    ff, ee = os.path.splitext(ff)
+
+    out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
     clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     return {
