@@ -7,7 +7,8 @@ from typing import Dict, List, Literal, Optional
 import soundfile as sf
 import gc, torch
 
-from src.asr_jetson.vad.silero import load_silero_vad, apply_vad
+from src.asr_jetson.vad.silero import load_silero_vad as _load_silero, apply_vad as _apply_silero
+from src.asr_jetson.vad.marblenet import load_marblenet_vad as _load_marblenet, apply_vad as _apply_marblenet
 from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings, ECAPAWrapper
 from src.asr_jetson.diarization.clustering import cluster_embeddings
 
@@ -89,6 +90,7 @@ def apply_diarization(
     device: str = "cuda",
     clustering_method: str = "ahc_viterbi",
     backend: str = "pyannote",  # titanet or ecapa ou pyannote
+    vad_backend: str = "silero",       # NEW: 'silero' | 'marblenet'
 ) -> List[Dict]:
     """
     Pipeline: VAD -> embeddings TitaNet-S -> clustering -> segments étiquetés.
@@ -102,13 +104,34 @@ def apply_diarization(
     else:
         pass
 
-    # 1) VAD sur un mono/16 kHz (apply_vad gère la lecture et resample si besoin)
-    audio_path = str(Path(audio_path))
-    vad_model, _ = load_silero_vad()
-    vad_segments = apply_vad(vad_model, audio_path, sample_rate=16000)
+        # 1) VAD selon choix utilisateur
+        if vad_backend.lower() == "marblenet":
+            vad_model = _load_marblenet(device=device)
+            vad_segments = _apply_marblenet(
+                vad_model, audio_path, sample_rate=16000,
+                min_speech_ms=150, min_silence_ms=150
+            )
+        elif vad_backend.lower() == "silero":
+            vad_model, silero_utils = _load_silero()
+            vad_segments = _apply_silero(
+                vad_model,
+                audio_path,
+                sample_rate=16000,
+                threshold=0.5,
+                min_silence_duration_ms=150,
+                speech_pad_ms=40,
+                window_size_samples=512,  # Silero natif
+                utils=silero_utils,  # évite un reload
+                postprocess=True,  # active notre preset
+                merge_gap_ms=140,
+                min_speech_ms=140,
+                pad_ms=100,
+            )
+        else:
+            raise ValueError(f"Expects silero or marblenet for VAD not {vad_backend.lower()}")
 
-    if not vad_segments:
-        return []
+        if not vad_segments:
+            return []
 
     # 2) Embeddings TitaNet-S (cherche d’abord localement)
     local_dir = os.getenv("ASR_NEMO_DIR", str(Path(__file__).resolve().parents[3] / "models" / "nemo"))
@@ -123,8 +146,37 @@ def apply_diarization(
     if embeddings is None or len(embeddings) == 0:
         return []
 
-    # 3) Clustering (propage la méthode demandée)
-    labels = cluster_embeddings(embeddings, n_speakers=n_speakers, method=clustering_method)
+    # ✅ DEBUG : Inspecter les embeddings
+    import numpy as np
+    print(f"\n[DEBUG EMBEDDINGS]")
+    print(f"  Nombre d'embeddings: {len(embeddings)}")
+    print(f"  Shape: {embeddings.shape}")
+    print(f"  Norme moyenne: {np.linalg.norm(embeddings, axis=1).mean():.4f}")
+    print(
+        f"  Norme min/max: {np.linalg.norm(embeddings, axis=1).min():.4f} / {np.linalg.norm(embeddings, axis=1).max():.4f}")
+
+    # Distance cosine entre embeddings
+    from sklearn.metrics.pairwise import cosine_distances
+    if len(embeddings) > 1:
+        dists = cosine_distances(embeddings)
+        print(f"  Distance cosine moyenne: {dists[np.triu_indices_from(dists, k=1)].mean():.4f}")
+        print(
+            f"  Distance cosine min/max: {dists[np.triu_indices_from(dists, k=1)].min():.4f} / {dists[np.triu_indices_from(dists, k=1)].max():.4f}")
+
+
+    # 3) Clustering avec paramètres pyannote si demandé
+    if clustering_method == "pyannote":
+        labels = cluster_embeddings(
+            embeddings,
+            n_speakers=n_speakers,
+            method="hierarchical",
+            threshold=0.7153814381597874,  # valeur par défaut pyannote 3.1
+            linkage_method="average",
+            min_cluster_size=15,
+            apply_smoothing=False
+        )
+    else:
+        labels = cluster_embeddings(embeddings, n_speakers=n_speakers, method=clustering_method)
 
     # 4) Assemblage des segments
     diarized_segments: List[Dict] = []

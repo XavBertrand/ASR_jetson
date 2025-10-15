@@ -62,6 +62,7 @@ class PipelineConfig:
     language: Optional[str] = None     # None = auto
     out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
     diarization_backend: str = "titanet"
+    vad_backend: str = "silero"
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
@@ -116,6 +117,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         device=device,
         clustering_method=cfg.clustering_method,
         backend=cfg.diarization_backend,
+        vad_backend=cfg.vad_backend,
     )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
@@ -154,7 +156,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
 
-    tag = f"_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}"
+    tag = f"_{cfg.vad_backend}_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}"
     out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
     out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
     out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")

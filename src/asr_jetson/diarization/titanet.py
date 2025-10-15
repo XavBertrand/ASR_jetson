@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -211,7 +211,7 @@ def load_titanet(
 
 def _l2_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """Normalisation L2 par vecteur (N, D) -> (N, D)."""
-    x = x - x.mean(dim=0, keepdim=True)
+    # x = x - x.mean(dim=0, keepdim=True)
     denom = torch.clamp(torch.norm(x, p=2, dim=-1, keepdim=True), min=eps)
     return x / denom
 
@@ -222,12 +222,13 @@ def extract_embeddings(
     segments: List[Dict],
     device: str = "cpu",
     batch_size: int = 16,
-    min_len_samples: int = 1600,  # ~0.1s à 16k
+    min_len_samples: int = 8000,  # ~0.5s à 16k, minimum for titanet-S
     l2_normalize: bool = True,
-    # --- AJOUT : fenêtrage interne optionnel ---
-    win_sec: Optional[float] = 1.5,
-    hop_sec: Optional[float] = 0.75,
-) -> np.ndarray:
+    win_sec: Optional[float] = 1.0,
+    hop_sec: Optional[float] = 0.25,
+    return_times: bool = False,        # <--- AJOUT
+) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+
     waveform, sr = torchaudio.load(wav_path)
     if sr != 16000:
         waveform = torchaudio.functional.resample(waveform, sr, 16000)
@@ -240,72 +241,101 @@ def extract_embeddings(
 
     chunks: List[torch.Tensor] = []
     lengths: List[int] = []
+    starts_samples: List[int] = []      # <--- AJOUT
 
     sig_len = int(signal.shape[1])
-
-    # --- AJOUT : pré-calc des pas de fenêtre (si activé) ---
     use_sliding = (win_sec is not None) and (hop_sec is not None) and (win_sec > 0) and (hop_sec > 0)
     if use_sliding:
         win = int(win_sec * 16000)
         hop = int(hop_sec * 16000)
 
+    ABSOLUTE_MIN_SEC = 0.5  # 0.5s minimum
+    segments = [s for s in segments if (float(s["end"]) - float(s["start"])) >= ABSOLUTE_MIN_SEC]
+
     for seg in segments:
-        start, end = int(seg["start"]), int(seg["end"])
+        # ✅ Conversion secondes -> samples
+        start = int(float(seg["start"]) * 16000)
+        end = int(float(seg["end"]) * 16000)
+
         start = max(0, min(start, sig_len))
         end = max(0, min(end, sig_len))
+
+        # ✅ Vérification longueur en samples
+        if (end - start) < 8000:  # < 0.5s
+            continue
+
         if end <= start:
             continue
 
         if not use_sliding:
-            # Comportement d'origine : 1 embedding par segment
             chunk = signal[:, start:end]
-            if chunk.shape[1] < min_len_samples:
-                pad = min_len_samples - chunk.shape[1]
+            actual_len = chunk.shape[1]  # ✅ Longueur réelle AVANT padding
+            if actual_len < min_len_samples:
+                pad = min_len_samples - actual_len
                 chunk = torch.nn.functional.pad(chunk, (0, pad))
             chunks.append(chunk.squeeze(0))
-            lengths.append(int(chunk.shape[1]))
+            lengths.append(actual_len)  # ✅ Longueur réelle du signal
+            # centre de la fenêtre unique
+            starts_samples.append(start + chunk.shape[1] // 2)  # <--- AJOUT
         else:
-            # Fenêtre glissante à l'intérieur du segment
             seg_len = end - start
             if seg_len <= 0:
                 continue
-
-            # Cas très court : une seule fenêtre (pad si besoin)
             if seg_len < max(min_len_samples, win):
                 chunk = signal[:, start:end]
-                if chunk.shape[1] < min_len_samples:
-                    pad = min_len_samples - chunk.shape[1]
+                actual_len = chunk.shape[1]  # ✅ Longueur réelle
+                if actual_len < min_len_samples:
+                    pad = min_len_samples - actual_len
                     chunk = torch.nn.functional.pad(chunk, (0, pad))
                 chunks.append(chunk.squeeze(0))
-                lengths.append(int(chunk.shape[1]))
+                lengths.append(actual_len)  # ✅ Longueur réelle
+                starts_samples.append(start + chunk.shape[1] // 2)  # <--- AJOUT
                 continue
 
-            # Génère les sous-fenêtres start->end avec hop
             sub_starts = list(range(start, end - win + 1, hop))
-            # Assure une fenêtre couvrant la fin
             if not sub_starts or sub_starts[-1] + win < end:
                 sub_starts.append(max(start, end - win))
 
             for s0 in sub_starts:
                 s1 = min(s0 + win, end)
                 chunk = signal[:, s0:s1]
-                if chunk.shape[1] < min_len_samples:
-                    pad = min_len_samples - chunk.shape[1]
+                actual_len = chunk.shape[1]  # ✅ Longueur réelle
+                if actual_len < min_len_samples:
+                    pad = min_len_samples - actual_len
                     chunk = torch.nn.functional.pad(chunk, (0, pad))
                 chunks.append(chunk.squeeze(0))
-                lengths.append(int(chunk.shape[1]))
+                lengths.append(actual_len)  # ✅ Longueur réelle
+                starts_samples.append(s0 + chunk.shape[1] // 2)   # <--- AJOUT
 
     if not chunks:
+        return (np.zeros((0, 192), dtype=np.float32), np.zeros((0,), dtype=np.float32)) if return_times \
+               else np.zeros((0, 192), dtype=np.float32)
+
+    # ✅ Validation finale : retire les chunks invalides
+    valid_indices = [i for i, (c, l) in enumerate(zip(chunks, lengths)) if l >= 8000]
+
+    if not valid_indices:
+        if return_times:
+            return np.zeros((0, 192), dtype=np.float32), np.zeros((0,), dtype=np.float32)
         return np.zeros((0, 192), dtype=np.float32)
+
+    chunks = [chunks[i] for i in valid_indices]
+    lengths = [lengths[i] for i in valid_indices]
+    starts_samples = [starts_samples[i] for i in valid_indices]
 
     embeddings_all: List[np.ndarray] = []
     model.eval()
+
+    ABSOLUTE_MIN = 8000
+
     with torch.inference_mode():
         for i in range(0, len(chunks), batch_size):
             batch_sig = chunks[i : i + batch_size]
             batch_len = lengths[i : i + batch_size]
 
-            max_len = max(batch_len)
+            # ✅ Garantit que max_len >= ABSOLUTE_MIN
+            max_len = max(max(batch_len), ABSOLUTE_MIN)
+
             padded = torch.stack(
                 [torch.nn.functional.pad(x, (0, max_len - x.shape[0])) for x in batch_sig],
                 dim=0,
@@ -313,16 +343,77 @@ def extract_embeddings(
 
             len_tensor = torch.tensor(batch_len, device=device, dtype=torch.int64)
 
-            out = model.forward(input_signal=padded, input_signal_length=len_tensor)
-            if isinstance(out, tuple):
-                out = out[0]
+            # ✅ DEBUG : Vérifier le signal d'entrée
+            if i == 0:
+                print(f"\n[DEBUG BATCH INPUT]")
+                print(f"  Padded shape: {padded.shape}")
+                print(f"  Lengths: {batch_len[:5]}")
+                print(f"  Signal stats: min={padded.min():.4f}, max={padded.max():.4f}, mean={padded.mean():.4f}")
+                print(f"  Signal std: {padded.std():.4f}")
+
+            logits, out = model.forward(input_signal=padded, input_signal_length=len_tensor)
+            # ✅ TitaNet retourne (logits, embeddings) ou juste embeddings
+            # if isinstance(out, tuple):
+            #     # NeMo retourne souvent (logits, embeddings) ou (embeddings, lengths)
+            #     # Les embeddings sont généralement le dernier élément de taill/e (batch, 192)
+            #     candidates = [o for o in out if isinstance(o, torch.Tensor)]
+            #
+            #     # Trouve le tensor avec dimension ~192
+            #     for candidate in candidates:
+            #         if candidate.ndim == 2 and candidate.shape[1] in [192, 256, 512]:
+            #             out = candidate
+            #             break
+            #     else:
+            #         # Fallback : prend le premier tensor 2D
+            #         out = out[-1] if len(out) > 1 else out[0]
+            #
+            # if out.ndim == 1:
+            #     out = out.unsqueeze(0)
+
+            # ✅ Vérification de dimension
+            if out.shape[1] > 1000:  # Audio brut au lieu d'embeddings !
+                raise RuntimeError(
+                    f"Embeddings invalides: shape {out.shape}. "
+                    f"Attendu: (batch, 192-512), obtenu: (batch, {out.shape[1]}). "
+                    f"Le modèle TitaNet ne retourne pas les embeddings."
+                )
             if out.ndim == 1:
                 out = out.unsqueeze(0)
+
+            # ✅ DEBUG : Embeddings AVANT normalisation
+            if i == 0:
+                print(f"\n[DEBUG EMBEDDINGS RAW]")
+                print(f"  Shape: {out.shape}")
+                print(f"  Stats: min={out.min():.4f}, max={out.max():.4f}, mean={out.mean():.4f}")
+                print(f"  Std: {out.std():.4f}")
+                print(f"  Norme L2 moyenne: {torch.norm(out, dim=1).mean():.4f}")
+
+                # Vérifier si tous les embeddings sont identiques
+                if len(out) > 1:
+                    diff = torch.abs(out[0] - out[1]).sum()
+                    print(f"  Différence entre emb[0] et emb[1]: {diff:.6f}")
 
             if l2_normalize:
                 out = _l2_normalize(out)
 
+            # ✅ DEBUG : Embeddings APRÈS normalisation
+            if i == 0:
+                print(f"\n[DEBUG EMBEDDINGS NORMALIZED]")
+                print(f"  Norme L2 moyenne: {torch.norm(out, dim=1).mean():.4f}")
+                if len(out) > 1:
+                    cos_sim = torch.nn.functional.cosine_similarity(out[0:1], out[1:2])
+                    print(f"  Similarité cosine entre emb[0] et emb[1]: {cos_sim.item():.4f}")
+
             embeddings_all.append(out.detach().cpu().to(torch.float32).numpy())
 
     embs = np.vstack(embeddings_all) if embeddings_all else np.zeros((0, 192), dtype=np.float32)
+
+    # Normalisation L2 finale (comme pyannote)
+    if l2_normalize:
+        norms = np.linalg.norm(embs, axis=1, keepdims=True)
+        embs = embs / np.maximum(norms, 1e-12)
+
+    if return_times:
+        starts_sec = np.asarray(starts_samples, dtype=np.float32) / 16000.0
+        return embs, starts_sec
     return embs

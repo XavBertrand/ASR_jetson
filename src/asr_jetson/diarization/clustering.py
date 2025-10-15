@@ -12,10 +12,11 @@ from dataclasses import dataclass
 from typing import Tuple, Sequence
 from sklearn.metrics import silhouette_score
 from math import log
-import numpy as np
+from typing import Optional, Tuple
 
 
-DiarizerMethod = Literal["spectral", "kmeans", "hierarchical"]
+DiarizerMethod = Literal["spectral", "kmeans", "hierarchical", "pyannote"]
+
 
 def _safe_cosine_distance_matrix(X: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     """
@@ -290,7 +291,11 @@ def cluster_embeddings(
         spectral_assign_labels: Literal["kmeans", "cluster_qr"] = "kmeans",
         random_state: int = 0,
         pca_dim: Optional[int] = None,
-        apply_smoothing: bool = False,  # NOUVEAU : désactive par défaut
+        apply_smoothing: bool = False,
+        # Nouveaux paramètres pyannote
+        threshold: Optional[float] = 1.1,
+        linkage_method: str = "average",
+        min_cluster_size: int = 1,
 ) -> np.ndarray:
     """
     Regroupe des embeddings en `n_speakers` clusters.
@@ -341,26 +346,66 @@ def cluster_embeddings(
         )
         return labels.astype(int)
 
-    # === HIERARCHICAL : CORRIGÉ ===
+    # === HIERARCHICAL PYANNOTE-LIKE ===
     if method == "hierarchical":
-        try:
-            # AgglomerativeClustering avec affinity='cosine' sur les EMBEDDINGS directement
-            agg = AgglomerativeClustering(
-                n_clusters=n_speakers,
-                metric='cosine',  # ou affinity='cosine' selon ta version sklearn
-                linkage='average'
-            )
-            labels = agg.fit_predict(X)
+        from scipy.cluster.hierarchy import linkage as scipy_linkage, fcluster
+        from scipy.spatial.distance import cdist
 
-            # Lissage OPTIONNEL
-            if apply_smoothing:
-                labels = smooth_labels(labels)
+        # Nettoyage
+        X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        norms = np.linalg.norm(X_clean, axis=1, keepdims=True)
+        valid_mask = (norms.squeeze(-1) > 1e-8)
+        if np.sum(valid_mask) < 2:
+            return np.zeros(len(X), dtype=int)
 
-            return labels.astype(int)
-        except Exception as e:
-            print(f"[WARN] Hierarchical clustering failed: {e}, falling back to KMeans")
-            km = KMeans(n_clusters=n_speakers, n_init=10, random_state=random_state)
-            return km.fit_predict(X).astype(int)
+        X_valid = X_clean[valid_mask]
+        # Normalisation L2 (comme pyannote)
+        X_unit = X_valid / (np.linalg.norm(X_valid, axis=1, keepdims=True) + 1e-12)
+
+        # Dendrogramme euclidien sur vecteurs unitaires
+        dendrogram = scipy_linkage(X_unit, method=linkage_method, metric="euclidean")
+
+        labels_valid = None
+
+        # 1) Si n_speakers est fixé -> impose K exact (maxclust)
+        if n_speakers is not None and n_speakers > 0:
+            labels_valid = fcluster(dendrogram, n_speakers, criterion="maxclust") - 1
+
+        # 2) Sinon, coupe au seuil (distance euclidienne)
+        else:
+            # ATTENTION: threshold attendu en euclidien
+            # Si tu pensais "cosine threshold", utilise: thr_euclid = math.sqrt(2 * thr_cosine)
+            thr_euclid = threshold if threshold is not None else 1.1  # défaut raisonnable
+            labels_valid = fcluster(dendrogram, thr_euclid, criterion="distance") - 1
+
+        # Gestion min_cluster_size: réassigner les petits -> grand le + proche
+        unique, counts = np.unique(labels_valid, return_counts=True)
+        large = unique[counts >= max(1, min_cluster_size)]
+        small = unique[counts < max(1, min_cluster_size)]
+
+        if len(large) == 0:
+            labels_valid[:] = 0
+        elif len(small) > 0:
+            # centroïdes sur X_unit (cohérent avec cosine/euclid)
+            large_centroids = np.vstack([X_unit[labels_valid == k].mean(axis=0) for k in large])
+            small_centroids = np.vstack([X_unit[labels_valid == k].mean(axis=0) for k in small])
+            # plus proche grand cluster en COSINE (ou euclid, équivalent ici)
+            dist = cdist(small_centroids, large_centroids, metric="cosine")
+            nearest = np.argmin(dist, axis=1)
+            for i, k_large in enumerate(nearest):
+                labels_valid[labels_valid == small[i]] = large[k_large]
+
+        # Renumérotation compacte 0..K-1
+        _, labels_valid = np.unique(labels_valid, return_inverse=True)
+
+        # Reconstruction globale (met -1 aux embeddings invalides)
+        labels = -1 * np.ones(len(X), dtype=int)
+        labels[valid_mask] = labels_valid
+
+        if apply_smoothing:
+            labels = smooth_labels(labels)
+
+        return labels.astype(int)
 
     # === SPECTRAL : meilleur pour les cas complexes ===
     S = _cosine_similarity_matrix(X)

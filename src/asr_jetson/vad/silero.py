@@ -2,10 +2,10 @@
 
 import torch
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 
-def load_silero_vad():
+def load_silero_vad() -> Tuple[torch.jit.ScriptModule, tuple]:
     """
     Load the Silero VAD model and utilities from torch.hub.
 
@@ -24,96 +24,85 @@ def load_silero_vad():
     )
     return model, utils
 
-def merge_segments(
-    segments: List[Dict],
+
+def normalize_segments(
+    segments: List[Dict[str, float]],
     *,
-    merge_gap_s: float = 0.25,       # si l’écart entre deux segments ≤ ce seuil → fusion
-    min_dur_s: float = 0.10,         # on jette les segments < min_dur_s après fusion
-    pad_s: float = 0.0,              # padding facultatif (appliqué puis recoupé)
-    require_same_speaker: bool = True,  # fusionne seulement si speaker identique
-) -> List[Dict]:
-    """
-    Fusionne des segments temporels (en secondes) trop proches / qui se chevauchent.
-    - merge_gap_s : écart max pour fusionner deux segments adjacents
-    - min_dur_s   : durée minimale à conserver après fusion
-    - pad_s       : pad (±) appliqué autour de chaque segment avant fusion
-    - require_same_speaker : si True, on fusionne seulement si seg['speaker'] est identique
+    merge_gap_ms: int = 140,
+    min_speech_ms: int = 140,
+    pad_ms: int = 100,
+    total_sec: float | None = None,
+) -> List[Dict[str, float]]:
+    """Post-traitement harmonisé pour mieux capter les alternances:
+    - padding de début/fin
+    - fusion des gaps courts
+    - filtre par durée minimale
     """
     if not segments:
         return []
+    segs = sorted(segments, key=lambda d: d["start"])
 
-    # normalise + trie
-    norm = []
-    for s in segments:
-        st, en = float(s["start"]), float(s["end"])
-        if en <= st:  # ignore invalid
-            continue
-        spk = s.get("speaker")
-        # padding local
-        st -= pad_s
-        en += pad_s
-        norm.append({"start": st, "end": en, "speaker": spk, **{k: v for k, v in s.items() if k not in ("start", "end", "speaker")}})
-    norm.sort(key=lambda x: (x.get("speaker"), x["start"])) if require_same_speaker else norm.sort(key=lambda x: x["start"])
+    # Padding
+    pad = pad_ms / 1000.0
+    for s in segs:
+        s["start"] = max(0.0, s["start"] - pad)
+        s["end"] = s["end"] + pad
+        if total_sec is not None:
+            s["end"] = min(total_sec, s["end"])
 
-    merged: List[Dict] = []
-    cur = norm[0]
-
-    def _can_merge(a: Dict, b: Dict) -> bool:
-        if require_same_speaker and a.get("speaker") != b.get("speaker"):
-            return False
-        gap = b["start"] - cur["end"]
-        return gap <= merge_gap_s  # fusionne si recouvrement (gap<0) ou petit trou
-
-    for nxt in norm[1:]:
-        if _can_merge(cur, nxt):
-            # étend la fenêtre courante
-            cur["end"] = max(cur["end"], nxt["end"])
-            # si tu veux concaténer un éventuel texte : cur["text"] = (cur.get("text","") + " " + nxt.get("text","")).strip()
+    # Fusion des gaps courts
+    merged = [segs[0]]
+    max_gap = merge_gap_ms / 1000.0
+    for s in segs[1:]:
+        if s["start"] - merged[-1]["end"] <= max_gap:
+            merged[-1]["end"] = max(merged[-1]["end"], s["end"])
         else:
-            # enlève le pad avant d’ajouter
-            start, end = max(0.0, cur["start"] + 0.0), cur["end"] - 0.0
-            if (end - start) >= min_dur_s:
-                cur["start"], cur["end"] = start, end
-                merged.append(cur)
-            cur = nxt
+            merged.append(s)
 
-    # flush dernier
-    start, end = max(0.0, cur["start"] + 0.0), cur["end"] - 0.0
-    if (end - start) >= min_dur_s:
-        cur["start"], cur["end"] = start, end
-        merged.append(cur)
-
-    # retire le padding si utilisé
-    if pad_s != 0.0:
-        for s in merged:
-            s["start"] = max(0.0, s["start"] + 0.0 - pad_s)
-            s["end"] = s["end"] - 0.0 + pad_s
-
-    # tri final par temps
-    merged.sort(key=lambda x: x["start"])
+    # Filtre durée mini
+    min_len = min_speech_ms / 1000.0
+    merged = [s for s in merged if (s["end"] - s["start"]) >= min_len]
     return merged
 
 
+@torch.no_grad()
 def apply_vad(
     model: torch.jit.ScriptModule,
-    wav_path: Path,
+    wav_path: str | Path,
     sample_rate: int = 16000,
     *,
+    # --- Paramètres natifs Silero ---
     threshold: float = 0.5,
-    min_silence_duration_ms: int = 150,  # ↑ pour MERGER davantage (ex: 300–600)
-    speech_pad_ms: int = 40,             # ↓ pour réduire l’OVERLAP (ex: 10–30)
-    window_size_samples: int = 512,      # défaut Silero (10–40 ms selon sr)
-    return_seconds: bool = True,         # pratique pour aligner avec Whisper
+    min_silence_duration_ms: int = 150,
+    speech_pad_ms: int = 40,
+    window_size_samples: int = 512,
+    return_seconds: bool = True,
+    # --- Pour éviter de recharger via hub à chaque appel ---
+    utils: tuple | None = None,
+    # --- Post-traitement harmonisé (preset alternances) ---
+    postprocess: bool = True,
+    merge_gap_ms: int = 140,
+    min_speech_ms: int = 140,
+    pad_ms: int = 100,
 ) -> List[Dict[str, Any]]:
     """
-    Applique Silero VAD avec contrôle fin de l'overlap et du merge.
+    Applique Silero VAD puis un post-traitement harmonisé (padding + fusion + min durée)
+    pour obtenir plus d'alternances propres entre locuteurs.
+
+    Retourne une liste de segments: [{'start': sec, 'end': sec}, ...]
     """
-    _, utils = load_silero_vad()
-    (get_speech_timestamps, _, read_audio, _, _) = utils
+    # Récupération des utils Silero (sans recharger le modèle si déjà fourni)
+    if utils is None:
+        _model_unused, utils = load_silero_vad()
+    get_speech_timestamps, _, read_audio, _, _ = utils
 
-    wav = read_audio(str(wav_path), sampling_rate=sample_rate)
+    # Lecture audio
+    wav_path = str(wav_path)
+    wav = read_audio(wav_path, sampling_rate=sample_rate)
+    total_sec = len(wav) / float(sample_rate)
 
-    speech_timestamps = get_speech_timestamps(
+    # Inference Silero
+    raw_segments = get_speech_timestamps(
         wav,
         model,
         sampling_rate=sample_rate,
@@ -124,4 +113,15 @@ def apply_vad(
         return_seconds=return_seconds,  # => start/end en secondes
     )
 
-    return speech_timestamps
+    if not postprocess:
+        return raw_segments
+
+    # Post-traitement preset (merge/pad/min_length)
+    final_segments = normalize_segments(
+        raw_segments,
+        merge_gap_ms=merge_gap_ms,
+        min_speech_ms=min_speech_ms,
+        pad_ms=pad_ms,
+        total_sec=total_sec,
+    )
+    return final_segments
