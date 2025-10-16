@@ -44,9 +44,13 @@ def _pyannote_diar(wav_path: str, n_speakers: Optional[int], device: str = "cpu"
     from pyannote.audio import Pipeline
     import torch
 
+
+    print("=" * 40+"\n"+ "   PYANNOTE DIARIZATION\n" + "=" * 40)
+
     # Charge le pipeline pré-entraîné (nécessite token HF valide)
     # Choix courant : "pyannote/speaker-diarization-3.1"
     pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
+    # pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", use_auth_token=hf_token)
     pipeline.to(torch.device("cuda" if (device.startswith("cuda") and torch.cuda.is_available()) else "cpu"))
 
     # Appel : avec ou sans contrainte de nb de speakers
@@ -81,6 +85,10 @@ def _pyannote_diar(wav_path: str, n_speakers: Optional[int], device: str = "cpu"
 
     # Tri chronologique (sécurité)
     results.sort(key=lambda s: (s["start"], s["end"]))
+
+    torch.cuda.empty_cache()
+    gc.collect()
+
     return results
 
 

@@ -217,5 +217,3 @@ override-dependencies = [
 [tool.uv.extra-build-dependencies]
 youtokentome = ["Cython"]
 
-[tool.uv.sources]
-pyannote-audio = { git = "https://github.com/pyannote/pyannote-audio.git", rev = "3.1.1" }

@@ -111,6 +111,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         wav_path = src_audio
 
     # 1) Diarization
+    print("=" * 40 + "\n" + "   DIARIZATION\n" + "=" * 40)
     diar_segments = apply_diarization(
         wav_path,
         n_speakers=cfg.n_speakers,
@@ -123,6 +124,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         return {"diarization": [], "asr": [], "labeled": []}
 
     # 2) ASR (faster-whisper)
+    print("=" * 40 + "\n" + "   ASR\n" + "=" * 40)
     model, _meta = load_faster_whisper(
         model_name=cfg.whisper_model,
         device=device,
@@ -223,6 +225,9 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
 
     out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
     clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
+
+    torch.cuda.empty_cache()
+    gc.collect()
 
     return {
         "diarization": diar_segments,
