@@ -57,7 +57,10 @@ dependencies = [
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
   "speechbrain>=1.0.3",
-  "pyannote-audio>=3.1",
+  "pyarrow>=12,<17",
+  "datasets>=2.14,<3.0",
+  "nemo-toolkit[asr]>=1.23.0",
+  "pyannote-audio",
 ]
 
 [project.optional-dependencies]
@@ -213,3 +216,4 @@ override-dependencies = [
 
 [tool.uv.extra-build-dependencies]
 youtokentome = ["Cython"]
+

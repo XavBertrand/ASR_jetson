@@ -53,7 +53,7 @@ class PipelineConfig:
     denoise: bool = False             # applique RNNoise/afftdn
     device: str = "cpu"              # "cpu" | "cuda"
     n_speakers: int = 2
-    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical"
+    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical" | "ahc_viterbi"
     spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
     vad_min_chunk_s: float = 0.5
     whisper_model: str = "medium"      # tiny/base/small/...
@@ -62,6 +62,7 @@ class PipelineConfig:
     language: Optional[str] = None     # None = auto
     out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
     diarization_backend: str = "titanet"
+    vad_backend: str = "silero"
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
@@ -110,17 +111,20 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         wav_path = src_audio
 
     # 1) Diarization
+    print("=" * 40 + "\n" + "   DIARIZATION\n" + "=" * 40)
     diar_segments = apply_diarization(
         wav_path,
         n_speakers=cfg.n_speakers,
         device=device,
         clustering_method=cfg.clustering_method,
         backend=cfg.diarization_backend,
+        vad_backend=cfg.vad_backend,
     )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
 
     # 2) ASR (faster-whisper)
+    print("=" * 40 + "\n" + "   ASR\n" + "=" * 40)
     model, _meta = load_faster_whisper(
         model_name=cfg.whisper_model,
         device=device,
@@ -154,9 +158,10 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
 
-    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + ".json")
-    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + ".srt")
-    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + ".txt")
+    tag = f"_{cfg.vad_backend}_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}"
+    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
+    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
+    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")
 
     # pour le SRT : array avec secondes & string speaker
     srt_payload = [
@@ -220,6 +225,9 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
 
     out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
     clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
+
+    torch.cuda.empty_cache()
+    gc.collect()
 
     return {
         "diarization": diar_segments,
