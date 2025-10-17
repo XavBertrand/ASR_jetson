@@ -372,44 +372,6 @@ def _fix_caps_with_languagetool(text: str) -> Optional[str]:
     corrected = "\n".join(out_lines).rstrip() + "\n"
     return corrected if _validate_structure(text, corrected) else None
 
-# def _clean_with_languagetool(text: str) -> Optional[str]:
-#     """
-#     Fallback 'léger' via LanguageTool (rule-based) — sans LLM.
-#     - Corrige ligne par ligne pour préserver strictement les préfixes 'SPEAKER_X:'.
-#     - Si LT n'est pas dispo (module/Java), renvoie None.
-#     ENV optionnel: LT_ENDPOINT=http://host:port (serveur LT distant)
-#     """
-#     try:
-#         import os, re
-#         import language_tool_python
-#
-#         lt_endpoint = os.getenv("LT_ENDPOINT", "").strip() or None
-#         if lt_endpoint:
-#             tool = language_tool_python.LanguageTool('fr', remote_server=lt_endpoint)
-#         else:
-#             tool = language_tool_python.LanguageTool('fr')  # nécessite Java local
-#
-#         out_lines = []
-#         for line in text.splitlines():
-#             m = re.match(r'^(\s*SPEAKER_\d+:\s*)(.*)$', line)
-#             if m:
-#                 prefix, content = m.group(1), m.group(2)
-#                 # Correction uniquement sur le contenu, jamais sur le préfixe
-#                 corrected = tool.correct(content)
-#                 # Normalise un seul espace après "SPEAKER_X:"
-#                 out_lines.append(f"{prefix.strip()} {corrected.strip()}")
-#             else:
-#                 # Hors ligne SPEAKER, corrige tel quel (ou laisse brut si tu préfères)
-#                 out_lines.append(tool.correct(line))
-#
-#         corrected_text = "\n".join(out_lines).rstrip() + "\n"
-#         # Garde-fou : même structure de tags et ordre des lignes SPEAKER
-#         if _validate_structure(text, corrected_text):
-#             return corrected_text
-#         return None
-#     except Exception as e:
-#         print(f"⚠️ LanguageTool indisponible: {e}")
-#         return None
 
 def _clean_with_languagetool(text: str) -> Optional[str]:
     """
@@ -457,8 +419,6 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
     except Exception as e:
         print(f"⚠️ LanguageTool indisponible: {e}")
         return None
-
-
 
 
 def clean_text_with_llm(
