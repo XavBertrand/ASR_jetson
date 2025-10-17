@@ -158,7 +158,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
 
-    tag = f"_{cfg.vad_backend}_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}"
+    tag = f"_{cfg.vad_backend}_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}".replace("/", "_")
     out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
     out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
     out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")

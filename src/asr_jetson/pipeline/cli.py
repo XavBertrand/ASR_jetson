@@ -8,7 +8,7 @@ def main():
     p.add_argument("--device", default="cuda", help='cpu | cuda (defaults to "cuda")')
     p.add_argument("--speakers", type=int, default=2, help="Expected number of speakers")
     p.add_argument("--whisper-model", default="medium", help="Whisper size (small, large-v3 or h2oai/faster-whisper-large-v3-turbo or openai/whisper-large-v3-turbo)")
-    p.add_argument("--whisper-compute", default="float16", help="CTranslate2 compute_type")
+    p.add_argument("--whisper-compute", default="int8_float16", help="CTranslate2 compute_type")
     p.add_argument("--lang", default="fr", help="Force language code (e.g. fr, en)")
     p.add_argument("--denoise", action="store_true", help="Apply RNNoise/denoise stage")
     p.add_argument("--out-dir", default="outputs", help="Output directory (json/srt/txt)")

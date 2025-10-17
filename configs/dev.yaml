@@ -1,3 +1,3 @@
 runtime:
-  device: "cpu"
+  device: "cuda"
   batch_size: 1

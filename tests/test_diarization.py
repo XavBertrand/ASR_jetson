@@ -28,8 +28,7 @@ def test_diarization_on_real_file_integration():
             audio_path,
             n_speakers=1,
             device="cuda",
-            clustering_method="spectral",  # identique à ta pipeline
-            backend="titanet",
+            backend="pyannote",
         )
     except FileNotFoundError as e:
         # typiquement : modèle NeMo introuvable / non téléchargé en contexte de test
