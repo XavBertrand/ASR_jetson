@@ -337,6 +337,43 @@ def _resolve_overlaps(spans: List[Span]) -> List[Span]:
                 out[collide] = s
     return sorted(out, key=lambda s: s.start)
 
+def _norm_key(s: str) -> str:
+    s = unidecode(s)
+    s = re.sub(r"[^\w\s-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip().lower()
+    return s
+
+def _group_aliases_generic(spans: List[Span], label: str, sim_threshold: int = 92) -> Dict[int, List[int]]:
+    """
+    Regroupe par similarité les spans d'un label (ex: ORG) en clusters.
+    Retourne {cluster_id: [indices_de_spans]}.
+    """
+    # indices des spans du label demandé
+    idxs = [i for i, s in enumerate(spans) if s.label == label]
+    clusters: List[List[int]] = []
+    for i in idxs:
+        si = spans[i].text
+        key_i = _norm_key(si)
+        placed = False
+        for cl in clusters:
+            j = cl[0]
+            sj = spans[j].text
+            key_j = _norm_key(sj)
+
+            # règles : exact (normalisé), acronymes tout caps, fuzzy
+            exact = (key_i == key_j)
+            allcaps = re.fullmatch(r"[A-Z0-9&\-]{2,12}", si) and re.fullmatch(r"[A-Z0-9&\-]{2,12}", sj)
+            sim = fuzz.WRatio(key_i, key_j)
+            if exact or allcaps or sim >= sim_threshold:
+                cl.append(i); placed = True; break
+        if not placed:
+            clusters.append([i])
+
+    # indexer les clusters par ordre de première apparition dans le texte
+    clusters.sort(key=lambda ids: min(spans[k].start for k in ids))
+    return {k+1: v for k, v in enumerate(clusters)}
+
+
 def group_person_aliases(spans: List[Span], original_text: str, include_cat_as_person: bool = True) -> Dict[int, List[int]]:
     email_sets = _extract_email_name_sets(original_text)
 
@@ -400,35 +437,74 @@ class MapEntry:
 def _pick_canonical(mentions: Iterable[str]) -> str:
     return max(mentions, key=lambda s: len(s))
 
-def _apply_replacements(text: str, spans: List[Span], clusters: Dict[int, List[int]]):
+def _apply_replacements(text: str, spans: List[Span], person_clusters: Dict[int, List[int]]):
     repls, mapping = [], {}
-    # PERSON clusters → <NOM_i>
-    for cid, idxs in clusters.items():
+
+    # 1) PERSON → <NOM_i>
+    for cid, idxs in person_clusters.items():
         mentions = [spans[i].text for i in idxs]
         tag = f"<NOM_{cid}>"
         mapping[tag] = {"canonical": _pick_canonical(mentions), "mentions": sorted(set(mentions)), "type": "PERSON"}
         for i in idxs:
             s = spans[i]; repls.append((s.start, s.end, tag))
-    # autres
-    used = set(i for ids in clusters.values() for i in ids)
-    counters: Dict[str,int] = {}
-    for i,s in enumerate(spans):
-        if i in used: continue
-        label_out = {"PER":"NOM","ORG":"ORG","LIEU":"LIEU","EMAIL":"EMAIL","TEL":"TEL","CAT":"CAT"}.get(s.label, "CAT")
-        if label_out == "NOM":
-            label_out = "CAT"
-        counters[label_out] = counters.get(label_out, 0) + 1
-        tag = f"<{label_out}_{counters[label_out]}>"
-        mapping[tag] = {"canonical": s.text, "mentions": [s.text], "type": label_out if label_out!="NOM" else "PERSON"}
-        repls.append((s.start, s.end, tag))
+
+    used = set(i for ids in person_clusters.values() for i in ids)
+
+    # 2) ORG / LIEU / CAT : on regroupe aussi !
+    for lbl, tag_base, thr in (("ORG", "ORG", 92), ("LIEU", "LIEU", 94), ("CAT", "CAT", 95)):
+        cl = _group_aliases_generic([spans[i] for i in range(len(spans))], lbl, sim_threshold=thr)
+        # cl a été construit sur la liste entière, il nous faut les indices globaux
+        # Recréer le mapping cluster -> indices globaux
+        clusters = {}
+        # reconstruire les ids globaux correspondant à ce label:
+        label_idxs = [i for i, s in enumerate(spans) if s.label == lbl]
+        # cl keys sont 1..n dans l'ordre d'apparition au sein du label
+        for k, local_ids in cl.items():
+            clusters[k] = [label_idxs[pos] for pos in range(len(label_idxs)) if pos in local_ids]  # ajustement
+        # S’il n’y a pas d’éléments pour ce label, next
+        if not label_idxs:
+            continue
+
+        # Re-numérotation par ordre d'apparition global pour stabilité
+        # (et éviter de réutiliser les mêmes compteurs que PERSON)
+        # On garde un compteur par label
+        counter = 0
+        # Mais surtout on veut garantir que chaque mention d’un même cluster => même tag
+        # On parcourt clusters dans l’ordre du premier offset global
+        clusters_sorted = sorted(clusters.values(), key=lambda ids: min(spans[i].start for i in ids))
+        for idxs in clusters_sorted:
+            counter += 1
+            tag = f"<{tag_base}_{counter}>"
+            mentions = [spans[i].text for i in idxs]
+            mapping[tag] = {"canonical": _pick_canonical(mentions), "mentions": sorted(set(mentions)), "type": tag_base}
+            for i in idxs:
+                if i in used:  # ne pas écraser PERSON déjà assigné (rare si lbl différent)
+                    continue
+                s = spans[i]; repls.append((s.start, s.end, tag))
+                used.add(i)
+
+    # 3) EMAIL / TEL (pas de clustering, c'est déjà exact et prioritaire)
+    counters = {}
+    for i, s in enumerate(spans):
+        if i in used:
+            continue
+        if s.label in ("EMAIL", "TEL"):
+            counters[s.label] = counters.get(s.label, 0) + 1
+            tag = f"<{s.label}_{counters[s.label]}>"
+            mapping[tag] = {"canonical": s.text, "mentions": [s.text], "type": s.label}
+            repls.append((s.start, s.end, tag))
+            used.add(i)
+
+    # 4) Remplacements (en préservant les espaces)
     repls.sort(key=lambda x: x[0], reverse=True)
     out = text
     for a, b, tag in repls:
-        left_space = " " if (a > 0 and not text[a - 1].isspace()) else ""
-        right_space = " " if (b < len(text) and not text[b:b + 1].isspace()) else ""
+        left_space  = " " if (a > 0 and not text[a-1].isspace()) else ""
+        right_space = " " if (b < len(text) and not text[b:b+1].isspace()) else ""
         out = out[:a] + left_space + tag + right_space + out[b:]
     out = re.sub(r"\s{2,}", " ", out).strip()
     return out, mapping
+
 
 class Anonymizer:
     def __init__(self, model_name: str = DEFAULT_MODEL, device: Optional[int|str] = "auto"):
