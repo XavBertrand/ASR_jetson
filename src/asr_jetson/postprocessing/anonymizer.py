@@ -22,15 +22,16 @@ STOPWORDS_FR = {
 }
 
 REGEX_EMAIL = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
-REGEX_TEL   = re.compile(r"(?<!\w)(?:\+?\d[\s\-.]?){7,}(?!\w)")
+REGEX_TEL = re.compile(r"(?<!\w)(?:\+?\d[\s\-.]?){9,}(?!\w)")
 REGEX_TITLE_PERSON = re.compile(
     r"\b(?:M|Mr|Monsieur|Mme|Madame|Mlle|Mademoiselle)\.?\s+[A-ZÉÈÀÂÎÔÙÜÇ][A-Za-zÀ-ÖØ-öø-ÿ'’-]+"
 )
 
-# NEW: nicknames simples (ajoute ce que tu veux)
-NICKNAME_MAP = {
+NICK_EQUIV = {
     "xav": "xavier",
     "alex": "alexandre",
+    "fred": "frederic",
+    "nico": "nicolas",
     "ben": "benjamin",
 }
 
@@ -41,6 +42,106 @@ REGEX_TITLE_PERSON = re.compile(
 )
 
 _WORD_CHARS = r"[A-Za-zÀ-ÖØ-öø-ÿ'’-]"
+
+# Protège les entêtes de locuteur : "SPEAKER_1 :" (insensible aux espaces)
+REGEX_SPEAKER_HEADER = re.compile(r"(?m)^\s*SPEAKER_\d+\s*:\s*")
+
+# Mots techniques à ignorer (pas d’anonymisation)
+DENYLIST_EXACT = {"sms", "whatsapp", "mail", "email", "appel", "appeler"}
+
+def _detect_ner_spans_chunked(text: str, ner_pipe, max_chars: int = 2000, overlap: int = 80) -> List[Span]:
+    """
+    Segmente `text` en fenêtres de `max_chars` avec un recouvrement `overlap`,
+    lance le NER sur chaque fenêtre et recalcule les offsets globaux.
+    """
+    spans: List[Span] = []
+    L = len(text)
+    if L == 0:
+        return spans
+
+    start = 0
+    while start < L:
+        end = min(L, start + max_chars)
+        # évite de couper au milieu d’un mot si possible
+        if end < L:
+            # recule jusqu’à un séparateur raisonnable
+            j = end
+            while j > start and text[j - 1].isalnum():
+                j -= 1
+            if j > start + int(0.7 * max_chars):
+                end = j  # seulement si on ne tronque pas trop
+        chunk = text[start:end]
+
+        # NER sur la fenêtre
+        out = ner_pipe(chunk, aggregation_strategy="simple")
+
+        # recalcule les offsets globaux + bornes de mot
+        for e in out:
+            raw_lbl = e.get("entity_group") or e.get("entity", "")
+            lbl = ENTITY_CANON.get(raw_lbl, raw_lbl)
+            if lbl not in ("NOM", "ORG", "LIEU", "CAT"):
+                continue
+            a_local, b_local = int(e["start"]), int(e["end"])
+            a_glob = start + a_local
+            b_glob = start + b_local
+            a_glob, b_glob = _expand_to_word_boundaries(text, a_glob, b_glob)
+            mention = text[a_glob:b_glob]
+            if lbl == "CAT" and _alnum_len(mention) < 3:
+                continue
+            spans.append(Span(mention, a_glob, b_glob, "PER" if lbl == "NOM" else lbl, "ner", 50))
+
+        # avance avec recouvrement
+        if end >= L:
+            break
+        start = end - overlap if end - overlap > start else end
+
+    return spans
+
+
+def _post_label_corrections(spans, text: str):
+    corrected = []
+    per_texts = [s.text for s in spans if s.label == "PER"]
+
+    for s in spans:
+        # Denylist
+        if s.text.lower() in DENYLIST_EXACT:
+            continue
+
+        # Contexte "chez X"
+        ctx_start = max(0, s.start - 10)
+        context = text[ctx_start:s.start].lower()
+        if "chez" in context and s.label in ("PER", "CAT"):
+            s = Span(s.text, s.start, s.end, "ORG", s.source, s.priority)
+
+        # Acronymes (avec filtre mots courants)
+        if re.fullmatch(r"[A-Z]{3,8}", s.text) and s.text not in {"URGENT", "MERCI", "BONJOUR"}:
+            s = Span(s.text, s.start, s.end, "ORG", s.source, s.priority)
+
+        # ORG → PER si proche d'une personne connue
+        if s.label == "ORG" and re.match(r"^[A-ZÉ][a-zà-ÿ]+$", s.text):
+            if per_texts:
+                best = process.extractOne(s.text, per_texts, scorer=fuzz.WRatio)
+                if best and best[1] >= 85:
+                    s = Span(s.text, s.start, s.end, "PER", s.source, s.priority)
+
+        corrected.append(s)
+    return corrected
+
+
+def _protected_ranges(text: str):
+    """Retourne les (start,end) des en-têtes SPEAKER_x : à ne pas anonymiser."""
+    return [(m.start(), m.end()) for m in REGEX_SPEAKER_HEADER.finditer(text)]
+
+def _drop_spans_in_protected(spans, protected_ranges):
+    if not protected_ranges:
+        return spans
+    kept = []
+    for s in spans:
+        if any(not (s.end <= a or s.start >= b) for a, b in protected_ranges):
+            # chevauche une zone protégée -> on jette
+            continue
+        kept.append(s)
+    return kept
 
 def _expand_to_word_boundaries(text: str, start: int, end: int):
     a, b = start, end
@@ -54,13 +155,7 @@ def _alnum_len(s: str) -> int:
     return len(re.sub(r"[^0-9A-Za-zÀ-ÖØ-öø-ÿ]", "", s))
 
 # Diminutifs FR (ajoute ce que tu veux au fil de l’eau)
-NICK_EQUIV = {
-    "xav": "xavier",
-    "alex": "alexandre",
-    "fred": "frederic",
-    "nico": "nicolas",
-    "ben": "benjamin",
-}
+
 
 def _extract_email_name_sets(text: str) -> list[set[str]]:
     sets = []
@@ -83,33 +178,7 @@ def _extended_name_tokens(s: str) -> set[str]:
 
 def _nickname_normalize(s: str) -> str:
     base = re.sub(r"[^a-z]", "", _normalize_name(s))
-    return NICKNAME_MAP.get(base, base)
-
-def _post_label_corrections(spans: List[Span]) -> List[Span]:
-    """
-    CamemBERT peut taguer par erreur en ORG des tokens Person-like.
-    Règles:
-      - un seul token Capitalisé sans suffixe org → PER
-      - proche (fuzzy) d'une autre mention PER → PER
-    """
-    # collecter mentions PER pour rapprochement
-    per_texts = [s.text for s in spans if s.label == "PER"]
-    corrected = []
-    for s in spans:
-        if s.label == "ORG":
-            tok = s.text.strip()
-            # un seul mot capitalisé (ex: 'Axavier') et pas un mot-clé d'entreprise
-            if re.match(r"^[A-ZÉÈÀÂÎÔÙÜÇ][a-zà-öø-ÿ'’-]+$", tok) and not re.search(r"(SA|SARL|SAS|Inc|LLC|Ltd)\b", tok):
-                # si proche d'une PER détectée
-                if per_texts:
-                    best = process.extractOne(tok, per_texts, scorer=fuzz.WRatio)
-                    if best and best[1] >= 80:
-                        s = Span(s.text, s.start, s.end, "PER", s.source, s.priority)
-                else:
-                    # par défaut reclasser en PER
-                    s = Span(s.text, s.start, s.end, "PER", s.source, s.priority)
-        corrected.append(s)
-    return corrected
+    return NICK_EQUIV.get(base, base)
 
 def _strip_titles(s: str) -> str:
     return re.sub(r"\b(mr|mme|mlle|m|m\.|mme\.|mlle\.)\b", "", s, flags=re.I)
@@ -225,20 +294,6 @@ def _detect_regex_spans(text: str) -> List[Span]:
     return spans
 
 
-
-def _detect_ner_spans(text: str, ner_pipe) -> List[Span]:
-    spans: List[Span] = []
-    for e in ner_pipe(text, aggregation_strategy="simple"):
-        raw_lbl = e.get("entity_group") or e.get("entity", "")
-        lbl = ENTITY_CANON.get(raw_lbl, raw_lbl)
-        if lbl not in ("NOM", "ORG", "LIEU", "CAT"):
-            continue
-        a, b = _expand_to_word_boundaries(text, int(e["start"]), int(e["end"]))
-        mention = text[a:b]
-        if lbl == "CAT" and _alnum_len(mention) < 3:
-            continue  # anti faux-positifs 'ce', 'a', ...
-        spans.append(Span(mention, a, b, "PER" if lbl == "NOM" else lbl, "ner", 50))
-    return spans
 
 def _resolve_overlaps(spans: List[Span]) -> List[Span]:
     if not spans:
@@ -397,8 +452,11 @@ class Anonymizer:
             if catalog_fuzzy_threshold > 0:
                 spans += gaz.fuzzy_spans(text, threshold=catalog_fuzzy_threshold)
         spans += _detect_regex_spans(text)
-        spans += _detect_ner_spans(text, self.ner)
-        spans = _post_label_corrections(spans)
+        spans += _detect_ner_spans_chunked(text, self.ner)
+
+        prot = _protected_ranges(text)
+        spans = _post_label_corrections(spans, text)
+        spans = _drop_spans_in_protected(spans, prot)
         spans_final = _resolve_overlaps(spans)
         clusters = group_person_aliases(spans_final, original_text=text, include_cat_as_person=catalog_as_person)
         out, mapping = _apply_replacements(text, spans_final, clusters)  # ✅ utiliser spans_final
