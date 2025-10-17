@@ -1,0 +1,26 @@
+[
+  { "pattern": "Action Avocats",            "label": "ORG" },
+  { "pattern": "Cabinet Action Avocats",    "label": "ORG" },
+  { "pattern": "Action Avocat",             "label": "ORG" },
+  { "pattern": "CEP",                       "label": "ORG" },
+  { "pattern": "C.E.P.",                    "label": "ORG" },
+
+  { "pattern": "Xavier",                    "label": "CAT" },
+  { "pattern": "Xavier Bertrand",           "label": "CAT" },
+  { "pattern": "XAVIER BERTRAND",           "label": "CAT" },
+  { "pattern": "M. Bertrand",               "label": "CAT" },
+  { "pattern": "Monsieur Bertrand",         "label": "CAT" },
+  { "pattern": "Xav",                       "label": "CAT" },
+
+  { "pattern": "Delphine",                  "label": "CAT" },
+  { "pattern": "Delphine",                  "label": "CAT" },
+  { "pattern": "Maître Delphine",           "label": "CAT" },
+  { "pattern": "Maitre Delphine",           "label": "CAT" },
+
+  { "pattern": "Sylvie",                    "label": "CAT" },
+  { "pattern": "Marine",                    "label": "CAT" },
+
+
+  { "pattern": "RGPD",                      "label": "CAT" },
+  { "pattern": "CNIL",                      "label": "ORG" }
+]

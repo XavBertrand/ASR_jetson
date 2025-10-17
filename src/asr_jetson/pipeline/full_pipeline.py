@@ -20,6 +20,7 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
+from asr_jetson.postprocessing.anonymizer import Anonymizer
 
 # --- Helpers ---
 def _ensure_parent(p: Path):
@@ -63,6 +64,15 @@ class PipelineConfig:
     out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
     diarization_backend: str = "titanet"
     vad_backend: str = "silero"
+
+    anonymize: bool = True
+    anon_model: str = "cmarkea/distilcamembert-base-ner"  # modèle HF FR léger (NER)
+    anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
+    anon_catalog: Optional[Path] = None  # chemin JSON/TXT du catalogue
+    anon_catalog_label: str = "CAT"  # label par défaut si TXT/JSON simple
+    anon_catalog_fuzzy: int = 90  # 0 pour désactiver fuzzy
+    anon_catalog_as_person: bool = True  # traiter le catalogue comme PERSON potentielle
+
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
@@ -218,13 +228,40 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     # )
     write_dialogue_txt(labeled_for_txt, out_txt)
 
-    # === NOUVEAU : post-correction LLM -> n'écrase pas le .txt original ===
-
+    # === POST: Anonymisation -> LLM -> Ré-identification ===
     pp, ff = os.path.split(out_txt)
     ff, ee = os.path.splitext(ff)
 
+    out_txt_anon = root_dir / cfg.out_dir / "txt" / f"{ff}_anon.txt"
+    out_txt_anon_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_anon_clean.txt"
     out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
-    clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
+    out_mapping_json = root_dir / cfg.out_dir / "json" / f"{ff}_anon_mapping.json"
+
+    if cfg.anonymize:
+        base_text = out_txt.read_text(encoding="utf-8")
+
+        anonymizer = Anonymizer(model_name=cfg.anon_model, device=cfg.anon_device)
+        anon_text, mapping = anonymizer.anonymize(
+            base_text,
+            catalog_path=str(cfg.anon_catalog) if cfg.anon_catalog else None,
+            catalog_label_default=cfg.anon_catalog_label,
+            catalog_fuzzy_threshold=int(cfg.anon_catalog_fuzzy),
+            catalog_as_person=bool(cfg.anon_catalog_as_person),
+        )
+
+        out_txt_anon.write_text(anon_text, encoding="utf-8")
+        out_mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # Envoi au LLM sur la version anonymisée
+        clean_text_with_llm(input_txt=out_txt_anon, output_txt=out_txt_anon_clean)
+
+        # Ré-identification (dé-anonymisation) après nettoyage LLM
+        anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
+        deanonymized = Anonymizer.deanonymize(anon_clean_text, mapping, restore="canonical")
+        out_txt_clean.write_text(deanonymized, encoding="utf-8")
+    else:
+        # Chemin historique sans anonymisation
+        clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -236,5 +273,9 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         "json": str(out_json),
         "srt": str(out_srt),
         "txt": str(out_txt),
+        "txt_anon": str(out_txt_anon) if cfg.anonymize else None,
+        "txt_anon_llm": str(out_txt_anon_clean) if cfg.anonymize else None,
         "txt_llm": str(out_txt_clean),
+        "anon_mapping": str(out_mapping_json) if cfg.anonymize else None,
     }
+
