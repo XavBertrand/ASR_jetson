@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.12"
 license = {text = "MIT"}
 authors = [{ name = "Xavier Bertrand", email = "xavier.bertrand@example.com" }]
-keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper", "nemo"]
+keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -22,25 +22,10 @@ classifiers = [
 
 dependencies = [
   "numpy<2.0",
-  "scikit-learn",
-  "tqdm",
   "pydub",
   "soundfile",
-  "librosa==0.10.2.post1",
-  "ffmpeg-python",
   "faster-whisper",
-  "onnx>=1.14",
-  "jiwer<4",
-  "marshmallow",
-  "pyloudnorm",
-  "resampy",
-  "wrapt",
-  "braceexpand",
-  "editdistance",
-  "wget",
-  "tensorboard",
   "pydantic>=2.0.0",
-  "pydantic-settings>=2.0.0",
   "pyyaml",
   "huggingface_hub>=0.23.0,<0.24.0",
   "transformers==4.41.2",
@@ -56,10 +41,6 @@ dependencies = [
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
-  "speechbrain>=1.0.3",
-  "pyarrow>=12,<17",
-  "datasets>=2.14,<3.0",
-  "nemo-toolkit[asr]>=1.23.0",
   "pyannote-audio",
   "python-docx>=1.2.0",
   "pytest>=8.4.2",
@@ -111,11 +92,6 @@ gpu-linux = [
 gpu-jetson = [
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
-]
-
-# NeMo ASR (Linux uniquement : desktop Linux, WSL2, Jetson)
-nemo = [
-  "nemo_toolkit[asr]>=1.21.0,<2.0; platform_system == 'Linux'",
 ]
 
 [project.urls]
@@ -221,4 +197,3 @@ override-dependencies = [
 
 [tool.uv.extra-build-dependencies]
 youtokentome = ["Cython"]
-

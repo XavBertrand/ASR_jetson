@@ -1,203 +1,94 @@
-# src/diarization/pipeline_diarization.py
+"""Pyannote-based speaker diarization pipeline."""
 from __future__ import annotations
 
+import gc
 import os
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
-import soundfile as sf
-import gc, torch
+from typing import Dict, List, Optional
 
-from src.asr_jetson.vad.silero import load_silero_vad as _load_silero, apply_vad as _apply_silero
-from src.asr_jetson.vad.marblenet import load_marblenet_vad as _load_marblenet, apply_vad as _apply_marblenet
-from src.asr_jetson.diarization.titanet import load_titanet, extract_embeddings, ECAPAWrapper
-from src.asr_jetson.diarization.clustering import cluster_embeddings
+import torch
 
-hf_token = os.getenv("HUGGINGFACE_TOKEN")
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 
 
-def _ensure_seconds(diar_segments, wav_path, sr_hint=16000):
+def _resolve_device(device: str) -> torch.device:
     """
-    Convertit les segments de diarization en SECONDES si on détecte qu'ils sont en échantillons.
-    Heuristique : si les timestamps ressemblent à des indices d'échantillons (>> secondes), on divise par sr.
+    Resolve the requested device to an available :mod:`torch` device.
+
+    :param device: Preferred device string such as ``"cpu"`` or ``"cuda"``.
+    :type device: str
+    :returns: Torch device respecting availability.
+    :rtype: torch.device
     """
-    if not diar_segments:
-        return diar_segments
+    if device.startswith("cuda") and torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
 
-    # essaie de lire le sample rate réel du fichier
-    sr = sr_hint
-    try:
-        with sf.SoundFile(str(wav_path)) as f:
-            sr = int(f.samplerate) or sr_hint
-    except Exception:
-        pass
 
-    # si les timestamps semblent être en samples (par ex. très grands)
-    max_end = max(float(d.get("end", 0)) for d in diar_segments)
-    # seuil simple : si > 10 * sr, on considère que c'est des samples (>=10s en samples)
-    if max_end > 10 * sr:
-        for d in diar_segments:
-            d["start"] = float(d["start"]) / sr
-            d["end"] = float(d["end"]) / sr
-    return diar_segments
+def apply_diarization(
+    audio_path: str | Path,
+    n_speakers: Optional[int] = None,
+    device: str = "cuda",
+    pyannote_pipeline: str = "pyannote/speaker-diarization-3.1",
+    auth_token: Optional[str] = None,
+) -> List[Dict[str, float | int]]:
+    """
+    Run the Pyannote diarization pipeline and return labelled segments.
 
-def _pyannote_diar(wav_path: str, n_speakers: Optional[int], device: str = "cpu"):
+    :param audio_path: Path to the audio file to analyse.
+    :type audio_path: str | Path
+    :param n_speakers: Optional constraint on the expected number of speakers.
+    :type n_speakers: Optional[int]
+    :param device: Execution device hint (``"cpu"`` or ``"cuda"``).
+    :type device: str
+    :param pyannote_pipeline: Name of the pretrained Pyannote pipeline to load.
+    :type pyannote_pipeline: str
+    :param auth_token: Hugging Face authentication token. Falls back to the
+        ``HUGGINGFACE_TOKEN`` environment variable when ``None``.
+    :type auth_token: Optional[str]
+    :returns: List of diarized segments with ``start``/``end`` (seconds) and ``speaker`` id.
+    :rtype: List[Dict[str, float | int]]
+    """
     from pyannote.audio import Pipeline
-    import torch
 
+    token = auth_token if auth_token is not None else HF_TOKEN
 
-    print("=" * 40+"\n"+ "   PYANNOTE DIARIZATION\n" + "=" * 40)
+    print("=" * 40 + "\n" + "   PYANNOTE DIARIZATION\n" + "=" * 40)
 
-    # Charge le pipeline pré-entraîné (nécessite token HF valide)
-    # Choix courant : "pyannote/speaker-diarization-3.1"
-    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hf_token)
-    # pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-community-1", use_auth_token=hf_token)
-    pipeline.to(torch.device("cuda" if (device.startswith("cuda") and torch.cuda.is_available()) else "cpu"))
+    pipeline = Pipeline.from_pretrained(pyannote_pipeline, use_auth_token=token)
+    pipeline.to(_resolve_device(device))
 
-    # Appel : avec ou sans contrainte de nb de speakers
+    inference_inputs = {"audio": str(audio_path)}
     if n_speakers and n_speakers > 0:
-        diar = pipeline({"audio": wav_path}, num_speakers=n_speakers)
+        annotation = pipeline(inference_inputs, num_speakers=n_speakers)
     else:
-        diar = pipeline({"audio": wav_path})
+        annotation = pipeline(inference_inputs)
 
-    # Convertir en liste de dicts {start,end,speaker}
-    # pyannote renvoie une Annotation (segments + labels)
-    results = []
-    label_map = {}  # map label pyannote -> int
-    next_id = 0
+    label_map: Dict[str, int] = {}
+    next_label = 0
+    results: List[Dict[str, float]] = []
 
-    for segment, _, label in diar.itertracks(yield_label=True):
-        lab = str(label)
-        # si c'est déjà un nombre ("0", "1"), conserve l'entier
-        if lab.isdigit():
-            spk = int(lab)
+    for segment, _, label in annotation.itertracks(yield_label=True):
+        label_str = str(label)
+        if label_str.isdigit():
+            speaker_id = int(label_str)
         else:
-            # sinon mappe de façon déterministe à 0..N-1
-            if lab not in label_map:
-                label_map[lab] = next_id
-                next_id += 1
-            spk = label_map[lab]
+            if label_str not in label_map:
+                label_map[label_str] = next_label
+                next_label += 1
+            speaker_id = label_map[label_str]
 
-        results.append({
-            "start": float(segment.start),
-            "end": float(segment.end),
-            "speaker": int(spk),  # <- toujours un int
-        })
+        results.append(
+            {
+                "start": float(segment.start),
+                "end": float(segment.end),
+                "speaker": speaker_id,
+            }
+        )
 
-    # Tri chronologique (sécurité)
-    results.sort(key=lambda s: (s["start"], s["end"]))
+    results.sort(key=lambda item: (item["start"], item["end"]))
 
     torch.cuda.empty_cache()
     gc.collect()
 
     return results
-
-
-def apply_diarization(
-    audio_path: str | Path,
-    n_speakers: int = 2,
-    device: str = "cuda",
-    clustering_method: str = "ahc_viterbi",
-    backend: str = "pyannote",  # titanet or ecapa ou pyannote
-    vad_backend: str = "silero",       # NEW: 'silero' | 'marblenet'
-) -> List[Dict]:
-    """
-    Pipeline: VAD -> embeddings TitaNet-S -> clustering -> segments étiquetés.
-
-    Retourne une liste de dicts :
-      { 'start': int, 'end': int, 'speaker': int }
-    Les temps sont en échantillons à 16 kHz (cohérents avec la VAD et TitaNet).
-    """
-    if backend == "pyannote":
-        return _pyannote_diar(audio_path, n_speakers, device=device)
-    else:
-        pass
-
-        # 1) VAD selon choix utilisateur
-        if vad_backend.lower() == "marblenet":
-            vad_model = _load_marblenet(device=device)
-            vad_segments = _apply_marblenet(
-                vad_model, audio_path, sample_rate=16000,
-                min_speech_ms=150, min_silence_ms=150
-            )
-        elif vad_backend.lower() == "silero":
-            vad_model, silero_utils = _load_silero()
-            vad_segments = _apply_silero(
-                vad_model,
-                audio_path,
-                sample_rate=16000,
-                threshold=0.5,
-                min_silence_duration_ms=150,
-                speech_pad_ms=40,
-                window_size_samples=512,  # Silero natif
-                utils=silero_utils,  # évite un reload
-                postprocess=True,  # active notre preset
-                merge_gap_ms=140,
-                min_speech_ms=140,
-                pad_ms=100,
-            )
-        else:
-            raise ValueError(f"Expects silero or marblenet for VAD not {vad_backend.lower()}")
-
-        if not vad_segments:
-            return []
-
-    # 2) Embeddings TitaNet-S (cherche d’abord localement)
-    local_dir = os.getenv("ASR_NEMO_DIR", str(Path(__file__).resolve().parents[3] / "models" / "nemo"))
-
-    if backend.lower() == "ecapa":
-        spk_model = ECAPAWrapper(device=device).to(device)
-    else:
-        spk_model = load_titanet(device=device, local_dir=local_dir)  # .eval() déjà appliqué
-
-    embeddings = extract_embeddings(spk_model, audio_path, vad_segments, device=device)
-
-    if embeddings is None or len(embeddings) == 0:
-        return []
-
-    # ✅ DEBUG : Inspecter les embeddings
-    import numpy as np
-    print(f"\n[DEBUG EMBEDDINGS]")
-    print(f"  Nombre d'embeddings: {len(embeddings)}")
-    print(f"  Shape: {embeddings.shape}")
-    print(f"  Norme moyenne: {np.linalg.norm(embeddings, axis=1).mean():.4f}")
-    print(
-        f"  Norme min/max: {np.linalg.norm(embeddings, axis=1).min():.4f} / {np.linalg.norm(embeddings, axis=1).max():.4f}")
-
-    # Distance cosine entre embeddings
-    from sklearn.metrics.pairwise import cosine_distances
-    if len(embeddings) > 1:
-        dists = cosine_distances(embeddings)
-        print(f"  Distance cosine moyenne: {dists[np.triu_indices_from(dists, k=1)].mean():.4f}")
-        print(
-            f"  Distance cosine min/max: {dists[np.triu_indices_from(dists, k=1)].min():.4f} / {dists[np.triu_indices_from(dists, k=1)].max():.4f}")
-
-
-    # 3) Clustering avec paramètres pyannote si demandé
-    if clustering_method == "pyannote":
-        labels = cluster_embeddings(
-            embeddings,
-            n_speakers=n_speakers,
-            method="hierarchical",
-            threshold=0.7153814381597874,  # valeur par défaut pyannote 3.1
-            linkage_method="average",
-            min_cluster_size=15,
-            apply_smoothing=False
-        )
-    else:
-        labels = cluster_embeddings(embeddings, n_speakers=n_speakers, method=clustering_method)
-
-    # 4) Assemblage des segments
-    diarized_segments: List[Dict] = []
-    for seg, label in zip(vad_segments, labels):
-        diarized_segments.append(
-            {"start": int(seg["start"]), "end": int(seg["end"]), "speaker": int(label)}
-        )
-
-    diarized_segments = _ensure_seconds(diarized_segments, audio_path)
-
-    # remove titanet from memory
-    del spk_model
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    return diarized_segments

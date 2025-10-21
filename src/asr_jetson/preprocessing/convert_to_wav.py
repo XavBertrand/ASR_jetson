@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Convertit des fichiers audio (WebM, MP4, M4A, etc.) en WAV mono 16kHz
-Compatible avec pyannote, whisper, et ton pipeline de diarization.
+Convert assorted audio files (WebM, MP4, M4A, etc.) to 16 kHz mono WAV files.
+Compatible with pyannote, Whisper, and the diarization pipeline.
 """
 
 from pathlib import Path
@@ -19,24 +19,27 @@ def convert_to_wav(
         use_ffmpeg: bool = True,
 ) -> Path:
     """
-    Convertit un fichier audio en WAV mono 16kHz.
+    Convert a single audio file into a 16 kHz mono WAV file.
 
-    Args:
-        input_path: Chemin du fichier source (WebM, MP4, etc.)
-        output_path: Chemin de sortie (défaut: même nom avec .wav)
-        sample_rate: Fréquence d'échantillonnage (16000 par défaut)
-        channels: Nombre de canaux (1=mono, recommandé pour la diarization)
-        use_ffmpeg: Utilise ffmpeg si dispo, sinon pydub/soundfile
-
-    Returns:
-        Path du fichier WAV créé
+    :param input_path: Source file path (WebM, MP4, and similar formats).
+    :type input_path: Union[str, Path]
+    :param output_path: Destination path (defaults to swapping the suffix to ``.wav``).
+    :type output_path: Optional[Union[str, Path]]
+    :param sample_rate: Target sampling rate in Hertz.
+    :type sample_rate: int
+    :param channels: Target number of channels; ``1`` (mono) is recommended for diarization.
+    :type channels: int
+    :param use_ffmpeg: Use ``ffmpeg`` when available, otherwise fall back to pure Python libraries.
+    :type use_ffmpeg: bool
+    :returns: Path to the generated WAV file.
+    :rtype: Path
     """
     input_path = Path(input_path)
 
     if not input_path.exists():
         raise FileNotFoundError(f"Fichier introuvable : {input_path}")
 
-    # Génère le nom de sortie
+    # Generate the output path.
     if output_path is None:
         output_path = input_path.with_suffix(".wav")
     else:
@@ -44,7 +47,7 @@ def convert_to_wav(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Méthode 1 : ffmpeg (le plus fiable et rapide)
+    # Method 1: ``ffmpeg`` (fastest and most reliable).
     if use_ffmpeg and shutil.which("ffmpeg"):
         print(f"[INFO] Conversion avec ffmpeg : {input_path.name} → {output_path.name}")
         cmd = [
@@ -53,7 +56,7 @@ def convert_to_wav(
             "-ar", str(sample_rate),  # Sample rate
             "-ac", str(channels),  # Mono
             "-sample_fmt", "s16",  # 16-bit PCM
-            "-y",  # Écrase si existe
+            "-y",  # overwrite if it already exists
             str(output_path)
         ]
 
@@ -71,7 +74,7 @@ def convert_to_wav(
             print(f"[ERREUR] ffmpeg a échoué : {e.stderr}")
             raise
 
-    # Méthode 2 : pydub (fallback si pas ffmpeg)
+    # Method 2: pydub (fallback when ffmpeg is unavailable).
     try:
         from pydub import AudioSegment
         print(f"[INFO] Conversion avec pydub : {input_path.name} → {output_path.name}")
@@ -87,7 +90,7 @@ def convert_to_wav(
     except ImportError:
         pass
 
-    # Méthode 3 : soundfile + torchaudio (si installé)
+    # Method 3: soundfile + torchaudio (when installed).
     try:
         import torchaudio
         import soundfile as sf
@@ -95,15 +98,15 @@ def convert_to_wav(
 
         waveform, sr = torchaudio.load(str(input_path))
 
-        # Resample si nécessaire
+        # Resample when needed.
         if sr != sample_rate:
             waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
 
-        # Convertit en mono
+        # Convert to mono.
         if waveform.shape[0] > channels:
             waveform = waveform.mean(dim=0, keepdim=True)
 
-        # Sauvegarde
+        # Persist the waveform.
         torchaudio.save(
             str(output_path),
             waveform,
@@ -129,20 +132,22 @@ def convert_to_wav(
 def convert_batch(
         input_dir: Union[str, Path],
         output_dir: Optional[Union[str, Path]] = None,
-        extensions: tuple = (".webm", ".mp4", ".m4a", ".ogg", ".opus"),
+        extensions: tuple[str, ...] = (".webm", ".mp4", ".m4a", ".ogg", ".opus"),
         **kwargs
 ) -> list[Path]:
     """
-    Convertit tous les fichiers audio d'un dossier.
+    Convert every audio file in a directory.
 
-    Args:
-        input_dir: Dossier contenant les fichiers sources
-        output_dir: Dossier de sortie (défaut: même dossier)
-        extensions: Extensions à convertir
-        **kwargs: Arguments passés à convert_to_wav()
-
-    Returns:
-        Liste des fichiers WAV créés
+    :param input_dir: Directory containing the source files.
+    :type input_dir: Union[str, Path]
+    :param output_dir: Destination directory (defaults to the input directory).
+    :type output_dir: Optional[Union[str, Path]]
+    :param extensions: Extensions that should be converted.
+    :type extensions: tuple[str, ...]
+    :param kwargs: Additional parameters forwarded to :func:`convert_to_wav`.
+    :type kwargs: dict
+    :returns: List of generated WAV files.
+    :rtype: list[Path]
     """
     input_dir = Path(input_dir)
 
@@ -176,7 +181,7 @@ def convert_batch(
     return converted
 
 
-# === Utilisation CLI ===
+# === CLI usage ===
 if __name__ == "__main__":
     import argparse
 
@@ -195,7 +200,7 @@ if __name__ == "__main__":
 
     try:
         if input_path.is_file():
-            # Conversion d'un fichier unique
+            # Convert a single file.
             convert_to_wav(
                 input_path,
                 args.output,
@@ -203,7 +208,7 @@ if __name__ == "__main__":
                 channels=channels
             )
         elif input_path.is_dir():
-            # Conversion batch
+            # Batch conversion.
             convert_batch(
                 input_path,
                 args.output,

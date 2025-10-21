@@ -9,10 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_full_pipeline_end_to_end(tmp_path):
     """
     Test d'intégration end-to-end :
-    denoise (off) -> diarization (VAD + TitaNet + clustering) -> ASR (faster-whisper)
+    denoise (off) -> diarization (Pyannote) -> ASR (faster-whisper)
     -> fusion -> export JSON & SRT.
 
-    Le test skip proprement si une dépendance lourde (NeMo, modèles) n'est pas dispo.
+    Le test skip proprement si une dépendance lourde (modèles Pyannote/HF) n'est pas dispo.
     """
     # Import tardif pour éviter un ImportError à la collection
     try:
@@ -31,22 +31,17 @@ def test_full_pipeline_end_to_end(tmp_path):
         denoise=False,
         device="cuda",
         n_speakers=1,
-        clustering_method="spectral",
-        spectral_assign_labels="kmeans",
-        vad_min_chunk_s=0.5,
         whisper_model="medium",
         whisper_compute="int8_float16",  # <--- clé : compatible CUDA
         language=None,
         out_dir=out_dir,
-        diarization_backend="titanet",
     )
 
     # Run
     try:
         result = run_pipeline(str(audio_path), cfg)
-    except FileNotFoundError as e:
-        # typiquement : modèle NeMo TitaNet indisponible/non téléchargeable dans l'environnement de test
-        pytest.skip(f"Ressource modèle indisponible pour l'intégration : {e}")
+    except (ModuleNotFoundError, ValueError) as e:
+        pytest.skip(f"Pyannote indisponible pour l'intégration : {e}")
     except Exception:
         # On laisse les autres exceptions remonter pour debug
         raise
@@ -58,7 +53,7 @@ def test_full_pipeline_end_to_end(tmp_path):
         assert isinstance(result[k], list), f"{k} doit être une liste"
 
     # On s'attend à au moins 1 segment final taggé
-    assert len(result["labeled"]) > 0, "Aucun segment final — vérifier VAD/embeddings/ASR/fusion"
+    assert len(result["labeled"]) > 0, "Aucun segment final — vérifier pipeline Pyannote/ASR/fusion"
 
     # Vérification SRT/JSON
     assert "json" in result and "srt" in result

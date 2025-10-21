@@ -1,3 +1,7 @@
+"""
+Full ASR pipeline orchestration, spanning preprocessing, diarization, ASR,
+and post-processing exports.
+"""
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -5,13 +9,12 @@ import json
 import os
 import torch
 import gc
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional, Any
 
-# === Imports de tes modules existants ===
-# Denoise
+# === Imports from the project modules ===
+# Denoising
 from asr_jetson.preprocessing.rnnoise import apply_rnnoise as _apply_rnnoise
 from asr_jetson.preprocessing.convert_to_wav import convert_to_wav
-# VAD
 # Diarization
 from asr_jetson.diarization.pipeline_diarization import apply_diarization
 # ASR
@@ -22,18 +25,43 @@ from asr_jetson.postprocessing.text_export import write_single_block_per_speaker
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import Anonymizer
 
+
 # --- Helpers ---
-def _ensure_parent(p: Path):
-    p.parent.mkdir(parents=True, exist_ok=True)
+def _ensure_parent(path: Path) -> None:
+    """
+    Ensure the parent directory of ``path`` exists.
+
+    :param path: Target path whose parent directory should be created.
+    :type path: Path
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+
 
 def _format_srt_timestamp(seconds: float) -> str:
+    """
+    Convert a time value in seconds to an SRT timestamp string.
+
+    :param seconds: Timestamp expressed in seconds.
+    :type seconds: float
+    :returns: Timestamp formatted as ``HH:MM:SS,mmm``.
+    :rtype: str
+    """
     ms = int(round(seconds * 1000))
     h, ms = divmod(ms, 3600_000)
     m, ms = divmod(ms, 60_000)
     s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-def _write_srt(segments: List[Dict], path: Path):
+
+def _write_srt(segments: List[Dict[str, Any]], path: Path) -> None:
+    """
+    Persist segments to an SRT file.
+
+    :param segments: Sequence of segments containing ``start``, ``end``, ``speaker``, and ``text``.
+    :type segments: List[Dict[str, Any]]
+    :param path: Destination file for the serialized SRT content.
+    :type path: Path
+    """
     _ensure_parent(path)
     lines = []
     for i, seg in enumerate(segments, 1):
@@ -51,34 +79,38 @@ def _write_srt(segments: List[Dict], path: Path):
 
 @dataclass
 class PipelineConfig:
-    denoise: bool = False             # applique RNNoise/afftdn
+    """Configuration container governing an ASR pipeline run."""
+
+    denoise: bool = False
     device: str = "cpu"              # "cpu" | "cuda"
-    n_speakers: int = 2
-    clustering_method: str = "hierarchical"      # "spectral" | "kmeans" | "hierarchical" | "ahc_viterbi"
-    spectral_assign_labels: str = "kmeans"   # "kmeans" | "cluster_qr"
-    vad_min_chunk_s: float = 0.5
+    n_speakers: Optional[int] = None
+    pyannote_pipeline: str = "pyannote/speaker-diarization-3.1"
+    pyannote_auth_token: Optional[str] = None
     whisper_model: str = "medium"      # tiny/base/small/...
-    # Remarque : "int8" = OK CPU seulement ; sur CUDA -> "int8_float16" recommandé
+    # Note: "int8" is CPU-only; prefer "int8_float16" when targeting CUDA.
     whisper_compute: str = "int8"      # int8 / int8_float16 / float16 / float32
-    language: Optional[str] = None     # None = auto
-    out_dir: Path = Path("outputs")    # où écrire JSON/SRT/WAV intermediaire
-    diarization_backend: str = "titanet"
-    vad_backend: str = "silero"
+    language: Optional[str] = None     # None = auto-detect
+    out_dir: Path = Path("outputs")    # where to write JSON/SRT/WAV intermediates
 
     anonymize: bool = True
-    anon_model: str = "cmarkea/distilcamembert-base-ner"  # modèle HF FR léger (NER)
+    anon_model: str = "cmarkea/distilcamembert-base-ner"  # lightweight HF NER model
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
-    anon_catalog: Optional[Path] = None  # chemin JSON/TXT du catalogue
-    anon_catalog_label: str = "CAT"  # label par défaut si TXT/JSON simple
-    anon_catalog_fuzzy: int = 90  # 0 pour désactiver fuzzy
-    anon_catalog_as_person: bool = True  # traiter le catalogue comme PERSON potentielle
+    anon_catalog: Optional[Path] = None  # JSON/TXT catalog path
+    anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON
+    anon_catalog_fuzzy: int = 90  # 0 disables fuzzy matching
+    anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
 
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     """
-    Adapte compute_type aux contraintes CTranslate2 :
-      - CPU : int8 / float32 ok
-      - CUDA : int8 N'EST PAS supporté -> utiliser int8_float16 (ou float16)
+    Normalize the requested Whisper compute type for CTranslate2 compatibility.
+
+    :param device: Execution device string (``"cpu"`` or ``"cuda"``).
+    :type device: str
+    :param compute_type: Desired CTranslate2 compute type.
+    :type compute_type: str
+    :returns: Compute type adjusted for the selected device.
+    :rtype: str
     """
     ct = (compute_type or "").lower()
     if device == "cuda":
@@ -86,20 +118,31 @@ def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
             return "int8_float16"
         if ct in ("float32", "float16", "int8_float16"):
             return ct
-        # fallback raisonnable sur GPU
+        # Reasonable fallback on GPU.
         return "float16"
     else:
-        # CPU : int8/float32 (ou float16 si dispo AVX512fp16, mais inutile ici)
+        # CPU: int8/float32 (float16 when available, though rarely necessary).
         return ct or "int8"
 
 
-def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
+def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
+    """
+    Execute the full ASR pipeline: optional denoising, diarization, ASR decoding,
+    speaker assignment, anonymisation, LLM cleanup, and artifact exports.
+
+    :param audio_path: Input audio file path accepted by the pipeline.
+    :type audio_path: str | os.PathLike
+    :param cfg: Pipeline configuration describing the desired behaviour.
+    :type cfg: PipelineConfig
+    :returns: Dictionary containing intermediate segments and output artifact paths.
+    :rtype: Dict[str, Any]
+    """
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
 
-    # Évite des crashs CTranslate2 : harmonise compute_type selon le device
+    # Avoid CTranslate2 crashes by harmonising compute_type with the device.
     compute_type = _sanitize_whisper_compute(device, cfg.whisper_compute)
 
-    # (optionnel) limite threads CT2 pendant les tests CI pour la stabilité
+    # Optionally limit CT2 threads during CI for stability.
     os.environ.setdefault("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "1")
     os.environ.setdefault("CT2_THREADS", "1")
 
@@ -108,7 +151,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     # convert to wav
     src_audio = convert_to_wav(src_audio)
 
-    # 0) (optionnel) Denoise -> wav propre
+    # 0) Optional denoising stage to produce a clean WAV.
     if cfg.denoise:
         denoised_wav = cfg.out_dir / "intermediate" / (src_audio.stem + "_denoised.wav")
         _ensure_parent(denoised_wav)
@@ -120,36 +163,35 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     else:
         wav_path = src_audio
 
-    # 1) Diarization
+    # 1) Diarization stage.
     print("=" * 40 + "\n" + "   DIARIZATION\n" + "=" * 40)
     diar_segments = apply_diarization(
         wav_path,
         n_speakers=cfg.n_speakers,
         device=device,
-        clustering_method=cfg.clustering_method,
-        backend=cfg.diarization_backend,
-        vad_backend=cfg.vad_backend,
+        pyannote_pipeline=cfg.pyannote_pipeline,
+        auth_token=cfg.pyannote_auth_token,
     )
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
 
-    # 2) ASR (faster-whisper)
+    # 2) ASR with Faster-Whisper.
     print("=" * 40 + "\n" + "   ASR\n" + "=" * 40)
     model, _meta = load_faster_whisper(
         model_name=cfg.whisper_model,
         device=device,
-        compute_type=compute_type,   # <-- utilise la valeur "safe"
+        compute_type=compute_type,   # trusted compute type
     )
     asr_segments = transcribe_segments(
         model, wav_path, diar_segments, language=cfg.language
     )
 
-    # delete whisper model from memory
+    # Delete the Whisper model from memory.
     del model
     torch.cuda.empty_cache()
     gc.collect()
 
-    # 3) Fusion (ASR + speaker par recouvrement temporel)
+    # 3) Merge ASR segments and speaker assignments.
     labeled = attach_speakers(diar_segments, asr_segments)
     # labeled: [{start,end,text,speaker}, ...]
 
@@ -159,7 +201,7 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         if "end_s" not in seg:
             seg["end_s"] = float(seg.get("end", 0.0))
 
-    # 4) Exports
+    # 4) Export artifacts.
     _ensure_parent(cfg.out_dir / "json")
     _ensure_parent(cfg.out_dir / "srt")
 
@@ -168,12 +210,13 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
 
-    tag = f"_{cfg.vad_backend}_{cfg.diarization_backend}_{cfg.clustering_method}_{cfg.whisper_model}".replace("/", "_")
+    diar_tag = cfg.pyannote_pipeline.split("/")[-1] if "/" in cfg.pyannote_pipeline else cfg.pyannote_pipeline
+    tag = f"_pyannote_{diar_tag}_{cfg.whisper_model}".replace("/", "_")
     out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
     out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
     out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")
 
-    # pour le SRT : array avec secondes & string speaker
+    # Build the SRT payload with second-based timestamps and speaker strings.
     srt_payload = [
         {
             "start": seg.get("start_s", seg.get("start", 0.0)),
@@ -224,11 +267,11 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
     # write_single_block_per_speaker_txt(
     #     labeled_for_txt,
     #     out_path=out_txt,
-    #     header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (ligne titre)
+    #     header_style="plain",  # "plain" => SPEAKER_X: ..., "title" => SPEAKER_X (title line)
     # )
     write_dialogue_txt(labeled_for_txt, out_txt)
 
-    # === POST: Anonymisation -> LLM -> Ré-identification ===
+    # === POST: Anonymisation -> LLM -> Re-identification ===
     pp, ff = os.path.split(out_txt)
     ff, ee = os.path.splitext(ff)
 
@@ -252,15 +295,15 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         out_txt_anon.write_text(anon_text, encoding="utf-8")
         out_mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        # Envoi au LLM sur la version anonymisée
+        # Send the anonymised version to the LLM for clean-up.
         clean_text_with_llm(input_txt=out_txt_anon, output_txt=out_txt_anon_clean)
 
-        # Ré-identification (dé-anonymisation) après nettoyage LLM
+        # Re-identify (de-anonymise) the LLM-cleaned text.
         anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
         deanonymized = Anonymizer.deanonymize(anon_clean_text, mapping, restore="canonical")
         out_txt_clean.write_text(deanonymized, encoding="utf-8")
     else:
-        # Chemin historique sans anonymisation
+        # Original path without anonymisation.
         clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     torch.cuda.empty_cache()
@@ -278,4 +321,3 @@ def run_pipeline(audio_path: str | os.PathLike, cfg: PipelineConfig) -> Dict:
         "txt_llm": str(out_txt_clean),
         "anon_mapping": str(out_mapping_json) if cfg.anonymize else None,
     }
-

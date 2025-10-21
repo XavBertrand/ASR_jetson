@@ -1,17 +1,16 @@
 # Lightweight ASR Pipeline with Diarization
 
 This repository provides a **lightweight, modular, and efficient Automatic Speech Recognition (ASR) pipeline** designed to run locally on both desktop GPUs and edge devices such as the **Jetson Orin Nano**.
-It combines noise suppression, Voice Activity Detection (VAD), speaker diarization, and ASR transcription in a single, end-to-end workflow.
+It combines optional noise suppression, speaker diarization, transcription, and post-processing in a single, end-to-end workflow driven by Pyannote + Faster-Whisper.
 
 ---
 
 ## ✨ Features
 
-* 🎧 **Noise suppression** with [RNNoise](https://github.com/xiph/rnnoise) to enhance speech quality.
-* 🎤 **Voice Activity Detection (VAD)** using [Silero VAD](https://github.com/snakers4/silero-vad) for accurate speech segmentation.
-* 👥 **Speaker diarization** with **TitaNet-S embeddings** and **spectral clustering**, enabling speaker-attributed transcriptions.
-* 📝 **Automatic Speech Recognition (ASR)** using [FasterWhisper](https://github.com/SYSTRAN/faster-whisper) or **NVIDIA FastConformer** (via [NeMo](https://github.com/NVIDIA/NeMo)).
-* ⚡ **Optimized for Jetson Orin Nano**: runs locally with CUDA/TensorRT acceleration.
+* 🎧 **Denoising (optional)** via [RNNoise](https://github.com/xiph/rnnoise).
+* 👥 **Speaker diarization** fully powered by [Pyannote Audio](https://github.com/pyannote/pyannote-audio).
+* 📝 **Automatic Speech Recognition (ASR)** using [FasterWhisper](https://github.com/SYSTRAN/faster-whisper).
+* ⚡ **Optimized for Jetson Orin Nano**: designed to run locally with CUDA/TensorRT acceleration.
 * 🧱 **uv + pyproject.toml** build system (no `requirements.txt` needed).
 * 🥪 Unit and integration tests with pytest.
 
@@ -23,14 +22,12 @@ It combines noise suppression, Voice Activity Detection (VAD), speaker diarizati
 ASR_jetson/
 ├── src/
 │   └── asr_jetson/
-│       ├── preprocessing/        # RNNoise wrapper
-│       ├── vad/                  # Silero VAD integration
-│       ├── diarization/          # TitaNet-S embeddings + clustering
-│       ├── asr/                  # FasterWhisper / NeMo FastConformer
-│       ├── postprocessing/       # Text cleaning and formatting
+│       ├── preprocessing/        # RNNoise wrapper + audio conversion helpers
+│       ├── diarization/          # Pyannote-based diarization pipeline
+│       ├── asr/                  # FasterWhisper helpers
+│       ├── postprocessing/       # Text cleaning, anonymisation, and report generation
 │       ├── pipeline/             # End-to-end pipeline orchestration (core + CLI)
-│       ├── io/                   # Audio I/O and storage utilities
-│       └── utils/                # Configs, helpers
+│       └── utils/                # Configs, logging helpers
 │
 ├── configs/                      # (optional) runtime YAML configs
 │   ├── dev.yaml
@@ -56,9 +53,10 @@ ASR_jetson/
 ### Prerequisites
 
 * Python ≥ 3.10
-* CUDA-enabled GPU (recommended)
-* [ffmpeg](https://ffmpeg.org/) in PATH
+* CUDA-enabled GPU (recommended for realtime / large models)
+* [ffmpeg](https://ffmpeg.org/) in PATH (required for audio conversion + RNNoise)
 * [uv](https://github.com/astral-sh/uv) installed (`pip install uv`)
+* (For diarization) a valid Hugging Face token stored in `HUGGINGFACE_TOKEN`
 
 ### Setup
 
@@ -66,11 +64,14 @@ ASR_jetson/
 git clone https://github.com/XavBertrand/ASR_jetson.git
 cd ASR_jetson
 
-# Create virtual environment and install dependencies
-uv sync --extra dev --extra media
+# Install dependencies (desktop Linux / WSL with CUDA 12.4 wheels)
+uv sync --extra dev --extra media --extra gpu-linux
 
-# (Optional) add GPU support on Windows
-uv add "torch==2.4.0+cu124" --extra-index-url https://download.pytorch.org/whl/cu124
+# Jetson (aarch64) simply omits the gpu-linux extra:
+# uv sync --extra dev --extra media --extra gpu-jetson
+
+# Authenticate with Hugging Face once for Pyannote access
+export HUGGINGFACE_TOKEN=hf_xxx
 ```
 
 ---
@@ -80,13 +81,20 @@ uv add "torch==2.4.0+cu124" --extra-index-url https://download.pytorch.org/whl/c
 ### Run from CLI
 
 ```bash
-uv run asr-pipeline --audio path/to/file.wav --out out/transcript.json
+uv run asr-pipeline \
+  --audio path/to/file.wav \
+  --out-dir outputs \
+  --speakers 2 \
+  --pyannote-pipeline pyannote/speaker-diarization-3.1
 ```
 
 Or directly:
 
 ```bash
 uv run python -m asr_jetson --audio path/to/file.wav
+
+# Or pass a token explicitly (useful in CI)
+uv run asr-pipeline --audio file.wav --pyannote-token "$HUGGINGFACE_TOKEN"
 ```
 
 ### Example Output
@@ -155,23 +163,25 @@ docker buildx build \
 uv run pytest
 ```
 
-To skip GPU tests on CPU:
+To skip GPU tests (or when Pyannote cannot run):
 
 ```bash
-pytest -m "not gpu"
+uv run pytest -m "not gpu"
 ```
+
+Integration tests rely on Pyannote and may require downloading weights from Hugging Face; set
+`HUGGINGFACE_TOKEN` accordingly or mark the `integration` tests to skip.
 
 ---
 
 ## 📊 Benchmarks
 
-| Model             | Device             | 1h audio runtime |
-| ----------------- | ------------------ | ---------------- |
-| Whisper Large     | Desktop GPU (4070) | ~12 min          |
-| FasterWhisper-M   | Jetson Orin Nano   | ~25–30 min       |
-| FastConformer-CTC | Jetson Orin Nano   | ~20–25 min       |
+| Model                | Device             | 1h audio runtime |
+| -------------------- | ------------------ | ---------------- |
+| FasterWhisper-Large  | Desktop GPU (4070) | ~12 min          |
+| FasterWhisper-Medium | Jetson Orin Nano   | ~25–30 min       |
 
-*(Approximate values depending on model and precision settings)*
+*(Approximate values; depends on compute type and GPU clocks)*
 
 ---
 
@@ -192,9 +202,12 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
-* [Silero VAD](https://github.com/snakers4/silero-vad)
+* [RNNoise](https://github.com/xiph/rnnoise)
+* [Pyannote Audio](https://github.com/pyannote/pyannote-audio)
+* [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
+* [uv](https://github.com/astral-sh/uv) for the packaging workflow
 * [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)
-* [TitaNet](https://arxiv.org/abs/2110.04410)
+* [Pyannote Audio](https://github.com/pyannote/pyannote-audio)
 * [Whisper & FasterWhisper](https://github.com/openai/whisper)
 * [RNNoise](https://github.com/xiph/rnnoise)
 * [uv](https://github.com/astral-sh/uv)

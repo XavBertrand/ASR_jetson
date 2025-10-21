@@ -1,4 +1,4 @@
-# src/postprocessing/llm_clean.py
+"""LLM-based text clean-up utilities for French transcription outputs."""
 from __future__ import annotations
 import os
 from pathlib import Path
@@ -6,9 +6,9 @@ import json
 import re
 import time
 import requests
-from typing import Optional
+from typing import Iterator, Optional
 
-# --- LanguageTool: cache persistant + instance globale réutilisée ---
+# --- LanguageTool: persistent cache + shared global instance ---
 os.environ.setdefault("LT_HOME", "/app/.cache/LanguageTool")
 try:
     import language_tool_python
@@ -17,7 +17,7 @@ try:
               else language_tool_python.LanguageTool('fr')
 except Exception as _e:
     LT_TOOL = None
-    print(f"[WARN] LanguageTool indisponible au chargement: {_e}")
+    print(f"[WARN] LanguageTool unavailable during import: {_e}")
 
 os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
 os.environ["LLM_MODEL"] = "gemma2:2b"
@@ -75,36 +75,54 @@ USER_INSTR = (
 )
 
 def _basic_local_cleanup(text: str) -> str:
-    """Fallback minimal si aucun LLM dispo (sécurise la pipeline)."""
+    """
+    Perform minimal local clean-up when no LLM is available, keeping the pipeline safe.
+
+    :param text: Raw transcription text.
+    :type text: str
+    :returns: Lightly cleaned text.
+    :rtype: str
+    """
     import re
 
-    # 1. Réduction basique des espaces
+    # 1. Basic whitespace reduction.
     s = re.sub(r"\s+", " ", text).strip()
 
-    # 2. Ponctuation : espace avant → retirer, espace après → forcer
+    # 2. Punctuation spacing: remove preceding spaces, enforce trailing spaces.
     s = re.sub(r"\s+([,.;:!?])", r"\1", s)
     s = re.sub(r"([,;:!?])(?=\S)", r"\1 ", s)
 
-    # 3. Apostrophes typographiques
+    # 3. Normalise apostrophes.
     s = s.replace(" '", " ’").replace("' ", "’ ").replace("'", "’")
 
-    # 4. Majuscule en début de phrase
+    # 4. Capitalise sentence starts.
     s = re.sub(r"(^|[.!?]\s+)(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
 
-    # 5. SPEAKER tags sur nouvelle ligne + **un seul espace après**
+    # 5. Place speaker tags on new lines with a single trailing space.
     s = re.sub(r"\s*(SPEAKER_\d+:)\s*", r"\n\1 ", s).strip()
 
-    # 6. Nettoyage des doublons de retours à la ligne
+    # 6. Remove duplicate newlines.
     s = re.sub(r"\n+", "\n", s)
 
-    # 7. Fin de ligne finale
+    # 7. Ensure a trailing newline.
     if not s.endswith("\n"):
         s += "\n"
 
     return s
 
-def _chunk_by_speakers(text: str, max_chars: int = 2200, max_lines: int = 80):
-    """Découpe par lignes SPEAKER_… en micro-blocs pour rester sous le contexte."""
+def _chunk_by_speakers(text: str, max_chars: int = 2200, max_lines: int = 80) -> Iterator[str]:
+    """
+    Split text into speaker-aligned chunks kept within context limits.
+
+    :param text: Full transcription text.
+    :type text: str
+    :param max_chars: Maximum characters per chunk.
+    :type max_chars: int
+    :param max_lines: Maximum lines per chunk.
+    :type max_lines: int
+    :yields: Subsections of the transcription bounded by ``SPEAKER_X`` lines.
+    :rtype: Iterator[str]
+    """
     chunk, nchar, nline = [], 0, 0
     for line in text.splitlines():
         L = len(line) + 1
@@ -117,27 +135,60 @@ def _chunk_by_speakers(text: str, max_chars: int = 2200, max_lines: int = 80):
         yield "\n".join(chunk)
 
 def _dedupe_runs(text: str, k_lines: int = 3, max_repeats: int = 2) -> str:
-    """Écrase les répétitions consécutives de k lignes (boucles LLM)."""
+    """
+    Collapse consecutive repetitions of ``k_lines`` to avoid LLM feedback loops.
+
+    :param text: Input text potentially containing repeated blocks.
+    :type text: str
+    :param k_lines: Window size to compare for repetition.
+    :type k_lines: int
+    :param max_repeats: Maximum allowed repetitions before trimming.
+    :type max_repeats: int
+    :returns: Text with redundant repeated blocks removed.
+    :rtype: str
+    """
     lines, out, rep = text.splitlines(), [], 0
     for ln in lines:
         out.append(ln)
         if len(out) >= 2*k_lines and out[-k_lines:] == out[-2*k_lines:-k_lines]:
             rep += 1
             if rep >= max_repeats:
-                out = out[:-k_lines]  # coupe la série répétée
+                out = out[:-k_lines]  # trim the repeated series
                 rep = 0
         else:
             rep = 0
     return "\n".join(out)
 
 
-def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, text: str, timeout_s: int = 120) -> Optional[str]:
+def _call_openai_compatible(
+    endpoint: str,
+    api_key: Optional[str],
+    model: str,
+    text: str,
+    timeout_s: int = 120,
+) -> Optional[str]:
+    """
+    Invoke an OpenAI-compatible chat completion endpoint.
+
+    :param endpoint: Base URL of the OpenAI-compatible server.
+    :type endpoint: str
+    :param api_key: Optional bearer token.
+    :type api_key: Optional[str]
+    :param model: Model identifier to request.
+    :type model: str
+    :param text: Text block to correct.
+    :type text: str
+    :param timeout_s: Request timeout in seconds.
+    :type timeout_s: int
+    :returns: Corrected text or ``None`` on failure.
+    :rtype: Optional[str]
+    """
     url = endpoint.rstrip("/") + "/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    # Alléger le user prompt si le bloc est long (on retire les exemples)
+    # Reduce the user prompt if the block is long (remove few-shot examples).
     user_msg = USER_INSTR + "\n\n" + text
     if len(text.split()) > 1200:
         user_msg = USER_INSTR.replace(FEW_SHOT_EXAMPLES, "") + "\n\n" + text
@@ -149,9 +200,9 @@ def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, t
             {"role": "user", "content": user_msg},
         ],
         "temperature": 0.0,
-        "top_p": 0.92,                       # un poil d'exploration sans dériver
-        "max_tokens": min(2048, max(512, len(text.split()) * 2)),  # borne dure
-        "stop": ["\n\nSPEAKER_", "\nSPEAKER_"],  # évite d'enchaîner sur le bloc suivant
+        "top_p": 0.92,                       # small exploration margin without drifting
+        "max_tokens": min(2048, max(512, len(text.split()) * 2)),  # hard upper bound
+        "stop": ["\n\nSPEAKER_", "\nSPEAKER_"],  # avoid bleeding into subsequent blocks
         "stream": False,
     }
     r = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
@@ -182,17 +233,27 @@ def _call_openai_compatible(endpoint: str, api_key: Optional[str], model: str, t
 
 def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
     """
-    Appelle Ollama /api/chat proprement pour Gemma 2.
-    - Pas d'amorçage 'assistant' en dernier (ça casse le template de certains modèles).
-    - Augmente num_ctx pour éviter la troncature des longs textes.
-    - Évite les few-shots si l'entrée est déjà longue.
+    Call the Ollama ``/api/chat`` endpoint with settings tuned for Gemma 2.
+
+    - Avoid seeding with an ``assistant`` message at the end (breaks some templates).
+    - Increase ``num_ctx`` to prevent truncating long transcripts.
+    - Remove few-shot examples when the input is already long.
+
+    :param model: Ollama model identifier.
+    :type model: str
+    :param text: Text block to correct.
+    :type text: str
+    :param timeout_s: Request timeout in seconds.
+    :type timeout_s: int
+    :returns: Corrected text or ``None`` if the request fails validation.
+    :rtype: Optional[str]
     """
     import re
     url = "http://localhost:11434/api/chat"
 
-    # Si le texte est long, on retire les EXEMPLES du prompt (ils bouffent du contexte)
+    # Remove examples when the text is long to preserve context.
     user_msg = USER_INSTR + "\n\n" + text
-    if len(text.split()) > 1200:  # seuil empirique
+    if len(text.split()) > 1200:  # empirical threshold
         user_msg = USER_INSTR.replace(FEW_SHOT_EXAMPLES, "") + "\n\n" + text
 
     payload = {
@@ -200,14 +261,14 @@ def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
         "messages": [
             {"role": "system", "content": SYS_PROMPT.replace("JA%AIS", "JAMAIS")},
             {"role": "user",   "content": user_msg},
-            # Ne PAS ajouter de message assistant ici
+            # Important: do not append an assistant message here.
         ],
         "options": {
             "temperature": 0.0,
             "top_p": 0.92,
             "repeat_penalty": 1.25,
             "num_predict": max(512, len(text.split()) * 2),
-            "num_ctx": 8192,  # <-- IMPORTANT : augmente la fenêtre de contexte si ton modèle le supporte
+            "num_ctx": 8192,  # Critical: increase context window if the model supports it.
             "stop": ["\n\nSPEAKER_", "\nSPEAKER_"]
         },
         "stream": False,
@@ -217,24 +278,38 @@ def _call_ollama(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
         r = requests.post(url, json=payload, timeout=timeout_s)
         if r.status_code == 200:
             content = r.json().get("message", {}).get("content", "").strip()
-            # Sanity check : si le modèle n'a pas vu le texte, il répond parfois "Commencez...", "J'attends..."
+            # Sanity check: if the model did not ingest the text it may respond with prompts such as
+            # "Commencez..." or "J'attends...".
             lower = content.lower()
             if ("commencez" in lower or "j'attends votre transcription" in lower
                 or ("corriger" in lower and len(content.split()) < 12)):
-                # On réessaie en 'génération simple' avec amorce stricte
+                # Retry using the strict prefix generation mode.
                 return _ollama_generate_prefix(model, text, timeout_s)
-            # Validation existante (tags SPEAKER, longueur, etc.)
+            # Validate the output (speaker tags, length, etc.).
             if _validate_ollama_output(text, content):
                 return content
         else:
             print(f"⚠️ Ollama HTTP {r.status_code}: {r.text[:200]}")
     except Exception as e:
-        print(f"⚠️ Erreur Ollama: {e}")
+        print(f"⚠️ Ollama error: {e}")
     return None
 
 def _ollama_generate_prefix(model: str, text: str, timeout_s: int = 120) -> Optional[str]:
-    """Fallback : /api/generate avec amorce stricte 'SPEAKER_X: ' pour forcer le format."""
-    import re, json, requests
+    """
+    Fallback using ``/api/generate`` with a strict ``SPEAKER_X:`` prefix to enforce format.
+
+    :param model: Ollama model identifier.
+    :type model: str
+    :param text: Text block to correct.
+    :type text: str
+    :param timeout_s: Request timeout in seconds.
+    :type timeout_s: int
+    :returns: Corrected text or ``None`` when output validation fails.
+    :rtype: Optional[str]
+    """
+    import json
+    import re
+    import requests
     url = "http://localhost:11434/api/generate"
     first = re.search(r'(SPEAKER_\d+:)', text)
     prefix = (first.group(1) + " ") if first else "SPEAKER_1: "
@@ -256,7 +331,7 @@ def _ollama_generate_prefix(model: str, text: str, timeout_s: int = 120) -> Opti
     r = requests.post(url, json=payload, timeout=timeout_s)
     if r.status_code == 200:
         out = r.json().get("response", "").strip()
-        # Préfixe garanti
+        # Guarantee the prefix is present.
         if not out.startswith(prefix):
             out = prefix + out
         return out if _validate_ollama_output(text, out) else None
@@ -264,45 +339,70 @@ def _ollama_generate_prefix(model: str, text: str, timeout_s: int = 120) -> Opti
 
 
 def _validate_ollama_output(original: str, corrected: str) -> bool:
-    """Valide que Ollama a bien corrigé et non analysé."""
+    """
+    Ensure the Ollama output is a correction rather than an analysis.
 
-    # 1. Vérifier les SPEAKER tags
+    :param original: Original transcription.
+    :type original: str
+    :param corrected: Candidate corrected output.
+    :type corrected: str
+    :returns: ``True`` if the corrected text respects constraints, ``False`` otherwise.
+    :rtype: bool
+    """
+
+    # 1. Check speaker tags.
     orig_speakers = set(re.findall(r'SPEAKER_\d+:', original))
     corr_speakers = set(re.findall(r'SPEAKER_\d+:', corrected))
     if orig_speakers != corr_speakers:
-        print(f"⚠️ SPEAKER tags différents: {orig_speakers} vs {corr_speakers}")
+        print(f"⚠️ Speaker tags mismatch: {orig_speakers} vs {corr_speakers}")
         return False
 
-    # 2. Vérifier la longueur (doit rester similaire ±50%)
+    # 2. Check length stays within ±50%.
     orig_words = len(original.split())
     corr_words = len(corrected.split())
     if corr_words < orig_words * 0.5 or corr_words > orig_words * 1.5:
-        print(f"⚠️ Longueur suspecte: {orig_words} mots → {corr_words} mots")
+        print(f"⚠️ Suspicious length: {orig_words} words → {corr_words} words")
         return False
 
-    # 3. Détecter si c'est une analyse (mots interdits au début)
+    # 3. Detect analysis-style introductions.
     forbidden_start = ["voici", "cette", "le texte", "analyse", "résumé", "thème"]
     first_line = corrected.split('\n')[0].lower()
     if any(first_line.startswith(word) for word in forbidden_start):
-        print(f"⚠️ Détection d'analyse: {first_line[:100]}")
+        print(f"⚠️ Analysis-style output detected: {first_line[:100]}")
         return False
 
-    # 4. Vérifier qu'il n'y a pas de structure d'analyse (numéros, tirets)
+    # 4. Reject numbered bullet structures.
     if re.search(r'^\d+\.', corrected, re.MULTILINE) or corrected.count('-') > orig_words * 0.1:
-        print(f"⚠️ Structure d'analyse détectée")
+        print("⚠️ Analysis structure detected")
         return False
 
     return True
 
 def _validate_structure(original: str, corrected: str) -> bool:
-    """Vérifie qu'on a conservé les mêmes SPEAKER tags et la même structure de lignes."""
+    """
+    Validate that the structure and speaker tags remain unchanged.
+
+    :param original: Original transcription.
+    :type original: str
+    :param corrected: Candidate corrected output.
+    :type corrected: str
+    :returns: ``True`` if the structure matches, ``False`` otherwise.
+    :rtype: bool
+    """
     import re
     orig_tags = re.findall(r'^(\s*SPEAKER_\d+:\s*)', original, flags=re.MULTILINE)
     corr_tags = re.findall(r'^(\s*SPEAKER_\d+:\s*)', corrected, flags=re.MULTILINE)
     return orig_tags == corr_tags and set(re.findall(r'SPEAKER_\d+:', original)) == set(re.findall(r'SPEAKER_\d+:', corrected))
 
 def _force_sentence_caps(text: str) -> str:
-    """Majuscules début de phrase / après .!?… sans toucher aux tags."""
+    """
+    Capitalise sentence starts without modifying speaker tags.
+
+    :param text: Text requiring sentence-case adjustments.
+    :type text: str
+    :returns: Text with adjusted casing.
+    :rtype: str
+    """
     import re
     def fix_line(line: str) -> str:
         line = re.sub(r'^([a-zà-ÿ])', lambda m: m.group(1).upper(), line)
@@ -318,9 +418,14 @@ def _force_sentence_caps(text: str) -> str:
 
 def _lowercase_connectives_after_comma(text: str) -> str:
     """
-    Met en minuscules certains connecteurs s'ils apparaissent après une virgule
-    au milieu d'une phrase (ex: ', Et' -> ', et').
-    On protège les préfixes SPEAKER_X: et on ne touche que les mots de la liste.
+    Lowercase select connectives appearing after a comma mid-sentence (e.g. ", Et" → ", et").
+
+    The function preserves ``SPEAKER_X`` prefixes and only adjusts listed words.
+
+    :param text: Text requiring connective adjustments.
+    :type text: str
+    :returns: Text with normalised connective casing.
+    :rtype: str
     """
     import re
     CONNECTEURS = {
@@ -345,7 +450,12 @@ def _lowercase_connectives_after_comma(text: str) -> str:
 
 def _fix_caps_with_languagetool(text: str) -> Optional[str]:
     """
-    Applique UNIQUEMENT les corrections de casse via LT, ligne par ligne (respecte SPEAKER_X:).
+    Apply only casing corrections via LanguageTool, line by line, preserving ``SPEAKER_X`` tags.
+
+    :param text: Text to adjust.
+    :type text: str
+    :returns: Corrected text or ``None`` when LanguageTool is unavailable or invalidates structure.
+    :rtype: Optional[str]
     """
     if LT_TOOL is None:
         return None
@@ -375,8 +485,14 @@ def _fix_caps_with_languagetool(text: str) -> Optional[str]:
 
 def _clean_with_languagetool(text: str) -> Optional[str]:
     """
-    Version 'safe' : n'applique que les corrections de casse et de ponctuation/espaces.
-    (évite les remplacements lexicaux type 'semble' -> 'parais')
+    Safe LanguageTool run applying only casing and punctuation/spacing fixes.
+
+    Lexical replacements (e.g. "semble" → "paraît") are intentionally avoided.
+
+    :param text: Text to adjust.
+    :type text: str
+    :returns: Corrected text or ``None`` when unavailable or rejected.
+    :rtype: Optional[str]
     """
     try:
         if LT_TOOL is None:
@@ -384,8 +500,8 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
         import re, unicodedata
 
         def is_punct_or_space_change(src: str, dst: str) -> bool:
-            # True si la diff ne porte que sur ponctuation / espaces
-            def keep_letters(s):  # on retire ponctuation+espaces
+            # True if difference only concerns punctuation or spaces.
+            def keep_letters(s):  # remove punctuation + spaces
                 return "".join(ch for ch in s if ch.isalpha() or ch.isdigit())
             return keep_letters(src).lower() == keep_letters(dst).lower()
 
@@ -404,7 +520,7 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
                 repl = mt.replacements[0] if mt.replacements else None
                 if not repl:
                     continue
-                # Autorisé si: règle de casse, ou changement uniquement ponctuation/espaces
+                # Allow when casing rules trigger or the difference is limited to punctuation/spaces.
                 if ("UPPER" in rid) or ("CAPITAL" in rid) or ("CASING" in cat) or is_punct_or_space_change(content[mt.offset:mt.offset+mt.errorLength], repl):
                     edits.append((mt.offset, mt.errorLength, repl))
 
@@ -417,7 +533,7 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
         corrected_text = "\n".join(out_lines).rstrip() + "\n"
         return corrected_text if _validate_structure(text, corrected_text) else None
     except Exception as e:
-        print(f"⚠️ LanguageTool indisponible: {e}")
+        print(f"⚠️ LanguageTool unavailable: {e}")
         return None
 
 
@@ -427,16 +543,30 @@ def clean_text_with_llm(
     default_model: str = "gemma2:2b",
     timeout_s: int = 240,
 ) -> Path:
+    """
+    Clean transcription text using available LLM backends with safe fallbacks.
+
+    :param input_txt: Path to the input text file.
+    :type input_txt: Path
+    :param output_txt: Destination path for the cleaned text.
+    :type output_txt: Path
+    :param default_model: Default Ollama model identifier.
+    :type default_model: str
+    :param timeout_s: Timeout for LLM requests in seconds.
+    :type timeout_s: int
+    :returns: Path to the cleaned text file.
+    :rtype: Path
+    """
     input_txt = Path(input_txt)
     output_txt = Path(output_txt)
     output_txt.parent.mkdir(parents=True, exist_ok=True)
 
     raw = input_txt.read_text(encoding="utf-8")
 
-    # Point de départ : texte brut
+    # Start from the raw text.
     current = raw
 
-    # (1) OpenAI-compatible (si dispo)
+    # (1) OpenAI-compatible backend (if available).
     endpoint = os.getenv("LLM_ENDPOINT", "").strip()
     if endpoint:
         model = os.getenv("LLM_MODEL", default_model).strip() or default_model
@@ -457,13 +587,13 @@ def clean_text_with_llm(
                     current = merged
                     print("✅ LLM (OpenAI-compatible, chunked)")
                 else:
-                    print("⚠️ Structure invalide après concaténation LLM — on ignore la sortie.")
+                    print("⚠️ Invalid structure after reconciling LLM output — ignoring result.")
             else:
-                print("⚠️ LLM OpenAI-compatible KO sur au moins un bloc — on ignore la sortie.")
+                print("⚠️ OpenAI-compatible LLM failed on at least one block — ignoring output.")
         except Exception as e:
-            print(f"⚠️ Erreur OpenAI-compatible: {e}")
+            print(f"⚠️ OpenAI-compatible error: {e}")
 
-    # (2) Ollama (seulement si le LLM précédent n’a rien produit d’exploitable)
+    # (2) Ollama (only if the previous LLM produced nothing usable).
     if current is raw:
         use_ollama = (os.getenv("USE_OLLAMA", "1") == "1")
         if use_ollama:
@@ -483,33 +613,33 @@ def clean_text_with_llm(
                         current = merged
                         print("✅ LLM (Ollama, chunked)")
                     else:
-                        print("⚠️ Structure invalide après concaténation Ollama — on ignore la sortie.")
+                        print("⚠️ Invalid structure after reconciling Ollama output — ignoring result.")
                 else:
-                    print("⚠️ Ollama KO sur au moins un bloc — on ignore la sortie.")
+                    print("⚠️ Ollama failed on at least one block — ignoring output.")
             except Exception as e:
-                print(f"⚠️ Erreur Ollama: {e}")
+                print(f"⚠️ Ollama error: {e}")
 
-    # --- À partir d'ici: post-processing TOUJOURS appliqué sur 'current' ---
-        # (3) Caps-first : regex + LT 'caps-only'
-        current_caps = _force_sentence_caps(current)
-        lt_caps = _fix_caps_with_languagetool(current_caps)
-        if lt_caps and _validate_structure(current, lt_caps):
-            current = lt_caps
-            print("✅ Caps fix (regex + LT)")
+        # --- From here: post-processing always applied on ``current`` ---
+            # (3) Caps-first: regex + LanguageTool casing-only pass.
+            current_caps = _force_sentence_caps(current)
+            lt_caps = _fix_caps_with_languagetool(current_caps)
+            if lt_caps and _validate_structure(current, lt_caps):
+                current = lt_caps
+                print("✅ Caps fix (regex + LT)")
 
-        # (3-bis) Minuscule des connecteurs après virgule (', Et' -> ', et', etc.)
-        current = _lowercase_connectives_after_comma(current)
+            # (3bis) Lowercase connectives after commas (", Et" -> ", et", etc.).
+            current = _lowercase_connectives_after_comma(current)
 
-        # (4) LT 'safe' (casse + ponctuation/espaces uniquement)
-        lt_full = _clean_with_languagetool(current)
-        if lt_full and _validate_structure(current, lt_full):
-            current = lt_full
-            print("✅ LanguageTool (casse+ponctuation)")
+            # (4) LanguageTool safe pass (casing + punctuation/spacing only).
+            lt_full = _clean_with_languagetool(current)
+            if lt_full and _validate_structure(current, lt_full):
+                current = lt_full
+                print("✅ LanguageTool (casing + punctuation)")
 
-        # (5) Regex minimal final (normalisation douce)
-        current = _basic_local_cleanup(current)
+            # (5) Minimal regex clean-up (soft normalisation).
+            current = _basic_local_cleanup(current)
 
-    # Écriture et fin
+    # Final write-out.
     output_txt.write_text(current if current.endswith("\n") else current + "\n", encoding="utf-8")
-    print("✅ Post-process final écrit")
+    print("✅ Final post-processing complete")
     return output_txt

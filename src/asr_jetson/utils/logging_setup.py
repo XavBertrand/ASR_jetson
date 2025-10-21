@@ -1,5 +1,5 @@
 """
-Configuration logging avec loguru
+Logging configuration utilities built on top of loguru.
 """
 import sys
 from pathlib import Path
@@ -7,6 +7,11 @@ from loguru import logger
 from functools import wraps
 import time
 from contextlib import contextmanager
+from typing import Callable, Iterator, ParamSpec, TypeVar
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 
 def setup_logging(
@@ -17,21 +22,25 @@ def setup_logging(
         json_logs: bool = False,
 ) -> None:
     """
-    Configure le logging avec loguru
+    Configure the global loguru logger.
 
-    Args:
-        log_dir: Dossier des logs
-        level: Niveau (DEBUG, INFO, WARNING, ERROR)
-        rotation: Rotation des fichiers
-        retention: Durée de rétention
-        json_logs: Format JSON pour parsing
+    :param log_dir: Directory where log files are stored.
+    :type log_dir: Path
+    :param level: Verbosity level (`DEBUG`, `INFO`, `WARNING`, or `ERROR`).
+    :type level: str
+    :param rotation: Log rotation policy understood by loguru.
+    :type rotation: str
+    :param retention: Retention policy for rotated log files.
+    :type retention: str
+    :param json_logs: Set to ``True`` to add a JSON log sink.
+    :type json_logs: bool
     """
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Supprimer handler par défaut
+    # Remove the default handler.
     logger.remove()
 
-    # Console (coloré)
+    # Colorized console output.
     logger.add(
         sys.stderr,
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> | <level>{message}</level>",
@@ -39,7 +48,7 @@ def setup_logging(
         colorize=True,
     )
 
-    # Fichier (tous les logs)
+    # Full debug log file.
     logger.add(
         log_dir / "asr_{time:YYYY-MM-DD}.log",
         rotation=rotation,
@@ -49,7 +58,7 @@ def setup_logging(
         enqueue=True,
     )
 
-    # Fichier erreurs
+    # Error-only log file.
     logger.add(
         log_dir / "errors_{time:YYYY-MM-DD}.log",
         rotation=rotation,
@@ -60,7 +69,7 @@ def setup_logging(
         diagnose=True,
     )
 
-    # JSON (optionnel)
+    # Optional JSON sink for machine parsing.
     if json_logs:
         logger.add(
             log_dir / "asr_{time:YYYY-MM-DD}.json",
@@ -73,8 +82,10 @@ def setup_logging(
     logger.info(f"Logging initialized: level={level}, dir={log_dir}")
 
 
-def log_system_info():
-    """Log infos système"""
+def log_system_info() -> None:
+    """
+    Log high-level system information such as platform, Python, and GPU data.
+    """
     import platform
     try:
         import torch
@@ -99,11 +110,18 @@ def log_system_info():
     logger.info("=" * 60)
 
 
-def log_performance(func):
-    """Décorateur pour mesurer performance"""
+def log_performance(func: Callable[P, T]) -> Callable[P, T]:
+    """
+    Decorator that records execution duration and outcome for a function.
+
+    :param func: Function whose execution should be instrumented.
+    :type func: Callable
+    :returns: Wrapped function with logging side effects.
+    :rtype: Callable
+    """
 
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         start = time.perf_counter()
         logger.debug(f"Starting {func.__name__}")
 
@@ -121,8 +139,15 @@ def log_performance(func):
 
 
 @contextmanager
-def log_step(step_name: str):
-    """Context manager pour logger une étape"""
+def log_step(step_name: str) -> Iterator[None]:
+    """
+    Context manager that logs the start, success, or failure of a processing step.
+
+    :param step_name: Human-friendly name of the step being executed.
+    :type step_name: str
+    :yields: ``None`` – execution continues inside the managed block.
+    :rtype: Iterator[None]
+    """
     start = time.perf_counter()
     logger.info(f"→ Starting: {step_name}")
 
