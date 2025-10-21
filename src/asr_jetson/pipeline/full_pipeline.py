@@ -24,6 +24,7 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import Anonymizer
+from asr_jetson.postprocessing.meeting_report import generate_meeting_report
 
 
 # --- Helpers ---
@@ -99,6 +100,9 @@ class PipelineConfig:
     anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON
     anon_catalog_fuzzy: int = 90  # 0 disables fuzzy matching
     anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
+    generate_meeting_report: bool = True
+    meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
+    meeting_report_prompt_key: str = "meeting_analysis"
 
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
@@ -137,6 +141,9 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     :returns: Dictionary containing intermediate segments and output artifact paths.
     :rtype: Dict[str, Any]
     """
+    if cfg.generate_meeting_report and not cfg.anonymize:
+        raise ValueError("Meeting report generation requires anonymisation to be enabled.")
+
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
 
     # Avoid CTranslate2 crashes by harmonising compute_type with the device.
@@ -280,6 +287,12 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
     out_mapping_json = root_dir / cfg.out_dir / "json" / f"{ff}_anon_mapping.json"
 
+    report_outputs: Dict[str, Optional[str]] = {
+        "report_anonymized_txt": None,
+        "report_txt": None,
+        "report_docx": None,
+    }
+
     if cfg.anonymize:
         base_text = out_txt.read_text(encoding="utf-8")
 
@@ -302,6 +315,19 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
         deanonymized = Anonymizer.deanonymize(anon_clean_text, mapping, restore="canonical")
         out_txt_clean.write_text(deanonymized, encoding="utf-8")
+
+        if cfg.generate_meeting_report:
+            prompts_path = cfg.meeting_report_prompts
+            if not prompts_path.is_absolute():
+                prompts_path = (root_dir / prompts_path).resolve()
+            if not prompts_path.exists():
+                raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
+            report_outputs = generate_meeting_report(
+                anonymized_txt_path=out_txt_anon_clean,
+                mapping_json_path=out_mapping_json,
+                prompts_json_path=prompts_path,
+                prompt_key=cfg.meeting_report_prompt_key,
+            )
     else:
         # Original path without anonymisation.
         clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
@@ -320,4 +346,5 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "txt_anon_llm": str(out_txt_anon_clean) if cfg.anonymize else None,
         "txt_llm": str(out_txt_clean),
         "anon_mapping": str(out_mapping_json) if cfg.anonymize else None,
+        **report_outputs,
     }

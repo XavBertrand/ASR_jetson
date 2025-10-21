@@ -105,8 +105,17 @@ def _detect_ner_spans_chunked(text: str, ner_pipe: Any, max_chars: int = 2000, o
             b_glob = start + b_local
             a_glob, b_glob = _expand_to_word_boundaries(text, a_glob, b_glob)
             mention = text[a_glob:b_glob]
+
+            # Ignore toute mention qui touche des tags déjà présents
+            if "<" in mention or ">" in mention:
+                continue
+
+            # (facultatif) micro-nettoyage espaces
+            mention = re.sub(r"\s{2,}", " ", mention).strip()
+
             if lbl == "CAT" and _alnum_len(mention) < 3:
                 continue
+
             spans.append(Span(mention, a_glob, b_glob, "PER" if lbl == "NOM" else lbl, "ner", 50))
 
         # Advance with overlap.
@@ -117,44 +126,85 @@ def _detect_ner_spans_chunked(text: str, ner_pipe: Any, max_chars: int = 2000, o
     return spans
 
 
-def _post_label_corrections(spans: List["Span"], text: str) -> List["Span"]:
-    """
-    Apply heuristic label corrections to NER spans.
-
-    :param spans: Raw spans produced by detectors.
-    :type spans: List[Span]
-    :param text: Original text content for contextual checks.
-    :type text: str
-    :returns: Filtered and relabelled span list.
-    :rtype: List[Span]
-    """
+def _post_label_corrections(spans, text: str):
     corrected = []
     per_texts = [s.text for s in spans if s.label == "PER"]
+    known_persons = set(per_texts)
+
+    PREP_PREFIX = r"(?:d'|de|du|des|à|au|aux|chez|le|la|les|l'|un|une|du|des|de la|de l'|comme|ou)\s+"
+
+
+    def clean_person(t: str) -> str:
+        t2 = re.sub(rf"^{PREP_PREFIX}", "", t, flags=re.I).strip()
+        t2 = re.sub(r"\s{2,}", " ", t2)
+        return t2
+
+    def looks_like_person(t: str) -> bool:
+        # 1–2 mots, initiales majuscules (ex: "Marine", "Marie Dupont", "M. Moral")
+        return (
+            re.fullmatch(r"(?:M\.\s+)?[A-ZÉÈÀÂÎÔÙÛÄËÏÖÜÇ][\w\-’']+(?:\s+[A-ZÉÈÀÂÎÔÙÛÄËÏÖÜÇ][\w\-’']+)?", t)
+            is not None
+        )
 
     for s in spans:
-        # Denylist.
-        if s.text.lower() in DENYLIST_EXACT:
+        t = s.text
+
+        # 0) purger tout ce qui touche des tags
+        if "<" in t or ">" in t:
             continue
 
-        # Context "chez X" implies the span is likely an organisation.
+        # 1) denylist stricte
+        if t.lower() in DENYLIST_EXACT:
+            continue
+
+        # 2) "chez X" -> ORG
         ctx_start = max(0, s.start - 10)
         context = text[ctx_start:s.start].lower()
         if "chez" in context and s.label in ("PER", "CAT"):
-            s = Span(s.text, s.start, s.end, "ORG", s.source, s.priority)
+            s = Span(t, s.start, s.end, "ORG", s.source, s.priority)
+            corrected.append(s)
+            continue
 
-        # Acronyms (guarded against common polite words).
-        if re.fullmatch(r"[A-Z]{3,8}", s.text) and s.text not in {"URGENT", "MERCI", "BONJOUR"}:
-            s = Span(s.text, s.start, s.end, "ORG", s.source, s.priority)
+        # 3) Acronymes 2–8 lettres (CJD, UDAF) -> ORG (hors mots fonctionnels)
+        if re.fullmatch(r"[A-Z]{2,8}", t) and t not in {"URGENT", "MERCI", "BONJOUR"}:
+            s = Span(t, s.start, s.end, "ORG", s.source, s.priority)
+            corrected.append(s)
+            continue
 
-        # ORG → PER when very similar to a known person.
-        if s.label == "ORG" and re.match(r"^[A-ZÉ][a-zà-ÿ]+$", s.text):
+        # 4) PERSON : nettoyer préposition tête + filtrer fragments
+        if s.label == "PER":
+            t2 = clean_person(t)
+            if looks_like_person(t2):
+                s = Span(t2, s.start, s.end, "PER", s.source, s.priority)
+                corrected.append(s)
+            # sinon, on jette (évite "avec Marine", "pour Sylvie", "pris Penny Lane", etc.)
+            continue
+
+        # 5) ORG -> PER si très proche d'une personne détectée (tolérant aux fautes)
+        if s.label == "ORG" and re.match(r"^[A-ZÉ][a-zà-ÿ]+$", t):
             if per_texts:
-                best = process.extractOne(s.text, per_texts, scorer=fuzz.WRatio)
-                if best and best[1] >= 85:
-                    s = Span(s.text, s.start, s.end, "PER", s.source, s.priority)
+                try:
+                    from rapidfuzz import process, fuzz  # si dispo
+                    best = process.extractOne(t, per_texts, scorer=fuzz.WRatio)
+                    if best and best[1] >= 85:
+                        s = Span(t, s.start, s.end, "PER", s.source, s.priority)
+                except Exception:
+                    pass
+
+        # 6) CAT : par défaut on NE les remonte plus (évite le bruit)
+        if s.label == "CAT":
+            continue
+
+        # ORG -> PER si le texte de l'ORG correspond exactement à une personne connue
+        if s.label == "ORG" and s.text in known_persons:
+            s = Span(s.text, s.start, s.end, "PER", s.source, s.priority)
+
+        if s.label == "LIEU" and re.fullmatch(r"[A-Z]{2,8}", s.text):
+            s = Span(s.text, s.start, s.end, "ORG", s.source, s.priority)
 
         corrected.append(s)
     return corrected
+
 
 
 def _protected_ranges(text: str) -> List[Tuple[int, int]]:
@@ -640,15 +690,148 @@ class MapEntry:
     type: str = "PERSON"
 
 def _pick_canonical(mentions: Iterable[str]) -> str:
-    """
-    Select the canonical mention, favouring the longest variant.
+    PREP_PREFIX = r"(?:d'|de|du|des|à|au|aux|chez|le|la|les|l'|un|une|de la|de l'|comme|ou)\s+"
 
-    :param mentions: Iterable of surface forms.
-    :type mentions: Iterable[str]
-    :returns: Canonical mention string.
-    :rtype: str
-    """
+    def norm(m: str) -> str:
+        # Enlève tags & préfixes, compresse espaces
+        m = re.sub(r"<[^>]+>", " ", m)
+        m = re.sub(rf"^{PREP_PREFIX}", "", m, flags=re.I).strip()
+        m = re.sub(r"\s{2,}", " ", m).strip()
+        # Si ce n'est pas un acronyme (2–8 majuscules), passe en TitleCase "léger"
+        if not re.fullmatch(r"[A-Z]{2,8}", m):
+            words = [w.capitalize() if w else w for w in m.split()]
+            m = " ".join(words)
+        return m
+
+    def person_like(m: str) -> bool:
+        # Écarte explicitement les débuts "avec/pour/comme/sur/dans/chez ..."
+        if re.match(r"^(avec|pour|comme|sur|dans|chez)\b", m.lower()):
+            return False
+        # 1–2 mots, initiales majuscules, ou "M. Nom"
+        return re.fullmatch(
+            r"(?:M\.\s+)?[A-ZÉÈÀÂÎÔÙÛÄËÏÖÜÇ][\w\-’']+(?:\s+[A-ZÉÈÀÂÎÔÙÛÄËÏÖÜÇ][\w\-’']+)?",
+            m
+        ) is not None
+
+    def org_like(m: str) -> bool:
+        # Acronyme (CJD, UDAF), ou nom composé capitalisé (ex "Penny Lane"), ou mots-clés d'orga
+        return (
+                re.fullmatch(r"[A-Z]{2,8}", m) is not None or
+                re.fullmatch(r"[A-ZÉ][a-zà-ÿ]+(?:\s+[A-ZÉ][a-zà-ÿ]+)+", m) is not None or
+                re.search(r"\b(Cabinet|Groupe|SAS|SARL|Association|Udaf|CJD)\b", m, flags=re.I) is not None
+        )
+
+    cleaned = [norm(m) for m in mentions]
+    cleaned = [m for m in cleaned if any(ch.isalpha() for ch in m)]
+
+    # 1) Priorité aux personnes plausibles
+    persons = [m for m in cleaned if person_like(m)]
+    if persons:
+        # Score : nb de mots "TitleCase" puis longueur
+        def score_person(x: str):
+            words = x.split()
+            title = sum(1 for w in words if w and w[0].isupper())
+            return (title, len(x))
+
+        return max(persons, key=score_person)
+
+    # 2) Sinon, organisations plausibles
+    orgs = [m for m in cleaned if org_like(m)]
+    if orgs:
+        return max(orgs, key=len)
+
+    # 3) Fallback : la plus "propre"
+    if cleaned:
+        return max(cleaned, key=len)
+
+    # 4) Dernier recours : historique
     return max(mentions, key=lambda s: len(s))
+
+def _clean_mapping(mapping: dict) -> dict:
+    """
+    Nettoie le mapping final pour supprimer/réparer le bruit typique des transcriptions ASR :
+      - retire les préfixes/conjonctions parasites en tête des canoniques (peut-être, comme, avec, pour, sur, dans)
+      - reclasse CJD en ORG s'il a été pris pour un LIEU
+      - reclasse en PERSON certaines entrées d'ORG qui sont manifestement des personnes (Marine, Philippe, …)
+      - supprime des cas incohérents connus (ex: 'Chine Marine')
+      - ignore les canoniques vides après nettoyage
+    """
+    cleaned = {}
+    for tag, info in mapping.items():
+        canon = (info.get("canonical") or "").strip()
+        typ   = info.get("type") or ""
+
+        # 1) retirer les préfixes/conjonctions parasites de tête
+        #    ex: "peut-être Oxicom" -> "Oxicom", "comme Udaf" -> "Udaf", "avec Marine" -> "Marine"
+        if canon:
+            canon = re.sub(r"(?i)\b(peut[- ]?être|comme|avec|pour|sur|dans)\b\s+", "", canon).strip()
+
+        # 2) LIEU improbable : 'CJD' -> ORG
+        if canon.upper() == "CJD" and typ == "LIEU":
+            typ = "ORG"
+
+        # 3) ORG -> PERSON si le canonique correspond clairement à une personne
+        if typ == "ORG" and canon in {"Marine", "Philippe", "Sylvie", "Ambre", "M. Moral", "Penny Lane"}:
+            typ = "PERSON"
+
+        # 4) Cas incohérent connu (bruit ASR) : "Chine Marine" -> on supprime
+        if re.search(r"(?i)\bChine\s+Marine\b", canon):
+            continue
+
+        # 5) sécurité : ignorer les canoniques vides/non alphabétiques après nettoyage
+        if not canon or not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", canon):
+            continue
+
+        cleaned[tag] = {**info, "canonical": canon, "type": typ}
+
+    return cleaned
+
+def _dedupe_and_retag_mapping(mapping: dict) -> dict:
+    """
+    - Fusionne les entrées ayant le même 'canonical' (insensible à la casse).
+    - Priorité de type: PERSON > ORG > LIEU > CAT.
+    - Recrée des tags cohérents avec le type (NOM_i / ORG_i / LIEU_i / CAT_i).
+    """
+    type_rank = {"PERSON": 3, "ORG": 2, "LIEU": 1, "CAT": 0}
+    buckets = {}  # canon_lower -> list[(tag, info)]
+    for tag, info in mapping.items():
+        canon = (info.get("canonical") or "").strip()
+        if not canon:
+            continue
+        canon_l = canon.lower()
+        buckets.setdefault(canon_l, []).append((tag, info))
+
+    # 1) pour chaque canonical, choisir le "meilleur" type + fusionner les mentions
+    merged = []  # list of dicts {type, canonical, mentions}
+    for canon_l, items in buckets.items():
+        # pick best by type_rank; si égalité, garde le 1er
+        best_tag, best_info = max(items, key=lambda kv: type_rank.get(kv[1].get("type") or "", -1))
+        best_type = best_info.get("type")
+        best_canon = best_info.get("canonical").strip()
+        all_mentions = []
+        for _tag, info in items:
+            all_mentions.extend(info.get("mentions") or [])
+        # unique mentions, tri simple
+        mentions = sorted(set(m.strip() for m in all_mentions if m and m.strip()))
+        merged.append({"type": best_type, "canonical": best_canon, "mentions": mentions})
+
+    # 2) re-tagger proprement: NOM_i / ORG_i / LIEU_i / CAT_i
+    counters = {"PERSON": 0, "ORG": 0, "LIEU": 0, "CAT": 0}
+    type_prefix = {"PERSON": "NOM", "ORG": "ORG", "LIEU": "LIEU", "CAT": "CAT"}
+    new_map = {}
+    for item in merged:
+        t = item["type"]
+        counters[t] += 1
+        tag = f"<{type_prefix[t]}_{counters[t]}>"
+        new_map[tag] = {
+            "canonical": item["canonical"],
+            "mentions": item["mentions"],
+            "type": t,
+        }
+    return new_map
+
+
+
 
 def _apply_replacements(
     text: str,
@@ -728,6 +911,10 @@ def _apply_replacements(
         right_space = " " if (b < len(text) and not text[b:b+1].isspace()) else ""
         out = out[:a] + left_space + tag + right_space + out[b:]
     out = re.sub(r"\s{2,}", " ", out).strip()
+
+    mapping = _clean_mapping(mapping)
+    mapping = _dedupe_and_retag_mapping(mapping)
+
     return out, mapping
 
 
