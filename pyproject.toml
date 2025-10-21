@@ -46,7 +46,7 @@ dependencies = [
   "flashtext>=2.7",
   "rapidfuzz>=3.14.1",
   "unidecode>=1.4.0",
-  "pyannote-audio==4.0.1",
+  "pyannote-audio>=4.0.1",
   "librosa==0.10.2.post1",
   "audioread>=3.0.1",
   "scipy>=1.16.2",

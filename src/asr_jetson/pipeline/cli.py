@@ -23,7 +23,7 @@ def main() -> None:
     p.add_argument("--lang", default="fr", help="Force language code (e.g. fr, en)")
     p.add_argument("--denoise", action="store_true", help="Apply RNNoise/denoise stage")
     p.add_argument("--out-dir", default="outputs", help="Output directory (json/srt/txt)")
-    p.add_argument("--pyannote-pipeline", default="pyannote/speaker-diarization-3.1", help="Pyannote pipeline identifier to use for diarization")
+    p.add_argument("--pyannote-pipeline", default="pyannote/speaker-diarization-community-1", help="Pyannote pipeline identifier to use for diarization")
     p.add_argument("--pyannote-token", default=None, help="Hugging Face token for private Pyannote pipelines (optional)")
     args = p.parse_args()
 
