@@ -7,7 +7,7 @@ name = "asr-jetson"
 version = "0.1.0"
 description = "Lightweight ASR Pipeline with Diarization for Jetson Orin Nano"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 license = {text = "MIT"}
 authors = [{ name = "Xavier Bertrand", email = "xavier.bertrand@example.com" }]
 keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper"]
@@ -21,32 +21,38 @@ classifiers = [
 ]
 
 dependencies = [
-  "numpy<2.0",
+  "numpy>=2.3.3,<3.0",
   "pydub",
   "soundfile",
   "faster-whisper",
   "pydantic>=2.0.0",
   "pyyaml",
-  "huggingface_hub>=0.23.0,<0.24.0",
-  "transformers==4.41.2",
+  "huggingface_hub>=0.25,<1.0",
+  "transformers>=4.48.3",
   "ctranslate2>=4.4.0",
   # --- PyTorch auto multi-arch (sans extras) ---
-  # Windows x86_64 CUDA 12.4
-  "torch==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
-  # Linux x86_64 (WSL2 inclus) CUDA 12.4
-  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 CUDA 12.6
+  "torch==2.8.0+cu126; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  # Linux x86_64 (WSL2 inclus) CUDA 12.6
+  "torch==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
   # Jetson Linux aarch64 (cuDNN/CUDA fournis par JetPack ; pas de suffixe +cu124)
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
-  "pyannote-audio",
   "python-docx>=1.2.0",
   "pytest>=8.4.2",
   "flashtext>=2.7",
   "rapidfuzz>=3.14.1",
   "unidecode>=1.4.0",
+  "pyannote-audio==4.0.1",
+  "librosa==0.10.2.post1",
+  "audioread>=3.0.1",
+  "scipy>=1.16.2",
+  "scikit-learn>=1.7.2",
+  "numba>=0.62.1",
+  "torchcodec==0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -77,14 +83,14 @@ media = [
 
 # PyTorch pour Windows avec CUDA 12.4
 gpu-win = [
-  "torch==2.4.0+cu124; platform_system == 'Windows'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Windows'",
+  "torch==2.8.0+cu126; platform_system == 'Windows'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Windows'",
 ]
 
 # PyTorch pour Linux x86_64 (WSL2, Desktop Linux) avec CUDA 12.4
 gpu-linux = [
-  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torch==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
 
 # PyTorch pour Jetson ARM64 (depuis PyTorch officiel ou NVIDIA)
@@ -138,7 +144,7 @@ filterwarnings = [
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311"]
+target-version = ["py311", "py312"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -154,7 +160,7 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 select = ["E", "W", "F", "I", "B", "C4", "UP"]
 ignore = ["E501", "B008", "C901"]
 exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
@@ -163,7 +169,7 @@ exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
 "__init__.py" = ["F401"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -190,10 +196,16 @@ exclude_lines = [
 ]
 
 [tool.uv]
-extra-index-url = ["https://download.pytorch.org/whl/cu124"]
-override-dependencies = [
-  "huggingface-hub>=0.23.0,<0.24.0",
-]
+index-strategy = "unsafe-best-match"
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchaudio = { index = "pytorch-cu126" }
 
 [tool.uv.extra-build-dependencies]
 youtokentome = ["Cython"]
