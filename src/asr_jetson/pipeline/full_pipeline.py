@@ -23,7 +23,12 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
-from asr_jetson.postprocessing.anonymizer import Anonymizer
+from asr_jetson.postprocessing.anonymizer import (
+    Settings as AnonymizerSettings,
+    anonymize_text,
+    deanonymize_text,
+    load_catalog,
+)
 from asr_jetson.postprocessing.meeting_report import generate_meeting_report
 
 
@@ -94,12 +99,18 @@ class PipelineConfig:
     out_dir: Path = Path("outputs")    # where to write JSON/SRT/WAV intermediates
 
     anonymize: bool = True
-    anon_model: str = "cmarkea/distilcamembert-base-ner"  # lightweight HF NER model
+    anon_model: str = "Jean-Baptiste/camembert-ner"
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
     anon_catalog: Optional[Path] = None  # JSON/TXT catalog path
     anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON
-    anon_catalog_fuzzy: int = 90  # 0 disables fuzzy matching
+    anon_catalog_fuzzy: int = 90  # legacy knob (unused with the Ollama anonymizer)
     anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
+    anon_ollama_url: str = "http://localhost:11434"
+    anon_llm_model: str = "mistral"
+    anon_ollama_timeout: int = 30
+    anon_enable_llm_qc: bool = True
+    anon_max_block_chars: int = 1200
+    anon_max_block_sents: int = 5
     generate_meeting_report: bool = True
     meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
     meeting_report_prompt_key: str = "meeting_analysis"
@@ -127,6 +138,27 @@ def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
     else:
         # CPU: int8/float32 (float16 when available, though rarely necessary).
         return ct or "int8"
+
+
+def _resolve_transformers_device(device_pref: str) -> int:
+    """
+    Convert a user-friendly device string into a transformers-compatible device index.
+    """
+    pref = (device_pref or "auto").strip().lower()
+    if pref in {"auto", "cuda", "gpu"}:
+        return 0 if torch.cuda.is_available() else -1
+    if pref.startswith("cuda:"):
+        try:
+            idx = int(pref.split(":", 1)[1])
+        except ValueError:
+            idx = 0
+        return idx if torch.cuda.is_available() else -1
+    if pref in {"cpu", "mps"}:
+        return -1
+    try:
+        return int(pref)
+    except ValueError:
+        return 0 if torch.cuda.is_available() else -1
 
 
 def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
@@ -296,13 +328,30 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     if cfg.anonymize:
         base_text = out_txt.read_text(encoding="utf-8")
 
-        anonymizer = Anonymizer(model_name=cfg.anon_model, device=cfg.anon_device)
-        anon_text, mapping = anonymizer.anonymize(
+        anon_settings = AnonymizerSettings(
+            model_id=cfg.anon_model,
+            device=_resolve_transformers_device(cfg.anon_device),
+            ollama_base_url=cfg.anon_ollama_url,
+            llm_model=cfg.anon_llm_model,
+            ollama_timeout=int(cfg.anon_ollama_timeout),
+            enable_llm_qc=bool(cfg.anon_enable_llm_qc),
+        )
+
+        catalog_entries = None
+        if cfg.anon_catalog:
+            catalog_path = cfg.anon_catalog
+            if not catalog_path.is_absolute():
+                catalog_path = (root_dir / catalog_path).resolve()
+            catalog_entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
+
+        anon_text, mapping = anonymize_text(
             base_text,
-            catalog_path=str(cfg.anon_catalog) if cfg.anon_catalog else None,
-            catalog_label_default=cfg.anon_catalog_label,
-            catalog_fuzzy_threshold=int(cfg.anon_catalog_fuzzy),
+            settings=anon_settings,
+            catalog_entries=catalog_entries,
+            catalog_default_label=cfg.anon_catalog_label,
             catalog_as_person=bool(cfg.anon_catalog_as_person),
+            max_block_chars=int(cfg.anon_max_block_chars),
+            max_block_sents=int(cfg.anon_max_block_sents),
         )
 
         out_txt_anon.write_text(anon_text, encoding="utf-8")
@@ -313,7 +362,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
 
         # Re-identify (de-anonymise) the LLM-cleaned text.
         anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
-        deanonymized = Anonymizer.deanonymize(anon_clean_text, mapping, restore="canonical")
+        deanonymized = deanonymize_text(anon_clean_text, mapping, restore="canonical")
         out_txt_clean.write_text(deanonymized, encoding="utf-8")
 
         if cfg.generate_meeting_report:

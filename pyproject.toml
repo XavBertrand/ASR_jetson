@@ -58,6 +58,8 @@ dependencies = [
   "tokenizers>=0.20,<0.21",
   "mistralai>=1.9.11",
   "docx-python>=0.1.0",
+  "pypandoc-binary>=1.15",
+  "sacremoses>=0.1.1",
 ]
 
 [project.optional-dependencies]

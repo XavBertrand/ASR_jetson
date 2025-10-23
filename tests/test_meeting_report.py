@@ -40,8 +40,25 @@ def temp_project(tmp_path: Path):
     # 2) Mapping anonymisation
     mapping_json = outputs_txt_dir / "testfile_anon_mapping.json"
     mapping = {
-        "PER": {"<PER_1>": "Delphine"},
-        "ORG": {"<ORG_1>": "UDAF"}
+        "entities": [
+            {
+                "tag": "<PER_1>",
+                "type": "PERSON",
+                "canonical": "Delphine",
+                "mentions": ["Delphine"],
+                "sources": ["stub"],
+            },
+            {
+                "tag": "<ORG_1>",
+                "type": "ORGANIZATION",
+                "canonical": "UDAF",
+                "mentions": ["UDAF"],
+                "sources": ["stub"],
+            },
+        ],
+        "summary": {"PERSON": 1, "ORGANIZATION": 1},
+        "tag_lookup": {"<PER_1>": "Delphine", "<ORG_1>": "UDAF"},
+        "meta": {"model_id": "stub"},
     }
     mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -91,7 +108,7 @@ def test_generate_meeting_report_end_to_end_no_network(
     """
     Test end-to-end du rapport :
       - Mock de l'appel LLM (aucun réseau)
-      - Mock de la désanonymisation via Anonymizer.deanonymize()
+      - Mock de la désanonymisation via deanonymize_text()
       - Vérification des 3 sorties (txt anonymisé, txt désanonymisé, docx)
     """
 
@@ -105,18 +122,20 @@ def test_generate_meeting_report_end_to_end_no_network(
     # Patch ce que meeting_report.py utilise réellement :
     monkeypatch.setattr(meeting_report_mod.mistral_client, "chat_complete", fake_chat_complete)
 
-    # === 2) Mock désanonymisation : Anonymizer.deanonymize ===
-    # On remplace la méthode par une version simple qui applique le mapping fourni.
+    # === 2) Mock désanonymisation : deanonymize_text ===
+    # On remplace la fonction par une version simple qui applique le mapping fourni.
     def fake_deanon(text: str, mapping: dict, restore: str = "canonical") -> str:
-        flat = {}
-        for _typ, d in mapping.items():
-            flat.update(d)
+
+        lookup = dict(mapping.get("tag_lookup", {}))
+        if not lookup:
+            for entity in mapping.get("entities", []):
+                lookup[entity["tag"]] = entity.get("canonical", entity["tag"])
         out = text
-        for tag, real in flat.items():
+        for tag, real in lookup.items():
             out = out.replace(tag, real)
         return out
 
-    monkeypatch.setattr(meeting_report_mod.Anonymizer, "deanonymize", staticmethod(fake_deanon))
+    monkeypatch.setattr(meeting_report_mod, "deanonymize_text", fake_deanon)
 
     # === 3) Exécution ===
     root = temp_project["root"]

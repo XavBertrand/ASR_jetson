@@ -4,8 +4,32 @@ from typing import Optional
 import json
 
 import asr_jetson.postprocessing.mistral_client as mistral_client
-from asr_jetson.postprocessing.anonymizer import Anonymizer  # ta classe existante
-from asr_jetson.postprocessing.docx_export import save_docx_from_markdown_sections
+from asr_jetson.postprocessing.anonymizer import deanonymize_text
+from asr_jetson.postprocessing.docx_export import export_markdown_docx_auto
+
+import re
+
+_TAG_NORM_RE = re.compile(r"<\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^>]*>|\{\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^}]*\}", re.UNICODE)
+
+def _normalize_llm_placeholders(text: str) -> str:
+    """
+    - Uniformise <org_9>, <Org_9>, <ORG_9>, et même <ORG_9...> en <ORG_9>
+    - Corrige les accolade/chevrons mal fermés (<PER_1}) → <PER_1>
+    - Supprime espaces parasites dans l’index (<ORG_ 9> → <ORG_9>)
+    """
+    def _repl(m):
+        # match peut être avec chevrons (groups 1,2) ou accolades (groups 3,4)
+        if m.group(1) and m.group(2):
+            typ = m.group(1).upper()
+            idx = re.sub(r"\s+", "", m.group(2))
+            return f"<{typ}_{idx}>"
+        else:
+            typ = m.group(3).upper()
+            idx = re.sub(r"\s+", "", m.group(4))
+            return f"<{typ}_{idx}>"
+    # remplace aussi chevrons/ou accolades de fin foireux
+    text = text.replace("}>", ">").replace("}", ">")
+    return _TAG_NORM_RE.sub(_repl, text)
 
 def generate_meeting_report(
     anonymized_txt_path: Path,
@@ -32,9 +56,23 @@ def generate_meeting_report(
     user_payload = prompt.user_prefix + anon_text
     analysis_anonymized = mistral_client.chat_complete(model=prompt.model, system=prompt.system, user_text=user_payload)
 
+    analysis_anonymized = _normalize_llm_placeholders(analysis_anonymized)
+
     # 3) Désanonymisation
     mapping = json.loads(Path(mapping_json_path).read_text(encoding="utf-8"))
-    analysis_deanonymized = Anonymizer.deanonymize(analysis_anonymized, mapping, restore="canonical")
+    analysis_deanonymized = deanonymize_text(analysis_anonymized, mapping, restore="canonical")
+
+    # — Nettoyage léger —
+    # a) retire d'éventuels tags restants que le LLM a inventés (ex: <ORG_9>)
+    analysis_deanonymized = re.sub(r"<[A-Z_]+(?:\d+)?>", "", analysis_deanonymized, flags=re.IGNORECASE)
+
+    # b) normalise quelques séparateurs Markdown (évite les "---" collés aux lignes)
+    analysis_deanonymized = analysis_deanonymized.replace("\r\n", "\n")
+    analysis_deanonymized = re.sub(r"\n?---\n?", "\n\n", analysis_deanonymized)
+    # c) tables à double "||" -> un seul "|"
+    analysis_deanonymized = analysis_deanonymized.replace("||", "|")
+    # d) s'assure que les puces commencent sur une nouvelle ligne
+    analysis_deanonymized = re.sub(r"(\S)(-\s+\*\*|-\s+)", r"\1\n\2", analysis_deanonymized)
 
     # 4) Sauvegardes
     base = (run_id or Path(anonymized_txt_path).stem.replace("_anon_clean", ""))
@@ -47,7 +85,7 @@ def generate_meeting_report(
         outputs_root = out_dir
     outputs_root.mkdir(parents=True, exist_ok=True)
     reports_dir = outputs_root / "reports"  # text exports
-    docx_dir = outputs_root / "docx"        # docx exports
+    docx_dir = outputs_root / "docx"  # docx exports
     reports_dir.mkdir(parents=True, exist_ok=True)
     docx_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +95,11 @@ def generate_meeting_report(
 
     out_txt_anon.write_text(analysis_anonymized, encoding="utf-8")
     out_txt.write_text(analysis_deanonymized, encoding="utf-8")
-    save_docx_from_markdown_sections(analysis_deanonymized, str(out_docx), title=f"Compte rendu — {base}")
+    export_markdown_docx_auto(
+        markdown_text=analysis_deanonymized,
+        out_path=str(out_docx),
+        title=f"Compte rendu — {base}",
+    )
 
     return {
         "report_anonymized_txt": str(out_txt_anon),

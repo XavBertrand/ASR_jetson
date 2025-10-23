@@ -1,25 +1,21 @@
 from __future__ import annotations
 
+import datetime
 from typing import List, Optional, Sequence, Tuple
 from xml.sax.saxutils import escape
 from zipfile import ZipFile, ZIP_DEFLATED
-import datetime
 
-try:  # pragma: no cover - exercised via integration tests
+try:  # pragma: no cover - optional dependency
     from docx import Document  # type: ignore
     from docx.shared import Pt  # type: ignore
     _HAS_PYTHON_DOCX = True
-except Exception:  # pragma: no cover - platform without python-docx
+except Exception:  # pragma: no cover - executed when python-docx missing
     Document = None  # type: ignore
     Pt = None  # type: ignore
     _HAS_PYTHON_DOCX = False
 
 
 def _build_blocks(text: str, title: Optional[str]) -> List[Tuple[str, str, int]]:
-    """
-    Convert the markdown-flavoured text into logical blocks to render in DOCX.
-    Blocks are tuples of (kind, content, heading_level).
-    """
     blocks: List[Tuple[str, str, int]] = []
     buffer: List[str] = []
 
@@ -52,7 +48,6 @@ def _write_with_python_docx(blocks: Sequence[Tuple[str, str, int]], out_path: st
         else:
             doc.add_paragraph(content)
 
-    # Normalise default text styling for better readability.
     style = doc.styles["Normal"]  # type: ignore[index]
     if Pt is not None:
         style.font.size = Pt(11)  # type: ignore[attr-defined]
@@ -215,13 +210,20 @@ def _write_fallback_docx(blocks: Sequence[Tuple[str, str, int]], out_path: str) 
 
 
 def save_docx_from_markdown_sections(text: str, out_path: str, title: Optional[str] = None) -> str:
-    """
-    Create a DOCX file summarising the provided markdown-like content.
-    Falls back to a minimal implementation when python-docx is unavailable.
-    """
     blocks = _build_blocks(text, title)
     if _HAS_PYTHON_DOCX:
         _write_with_python_docx(blocks, out_path)
     else:
         _write_fallback_docx(blocks, out_path)
     return out_path
+
+
+def export_markdown_docx_auto(
+    markdown_text: str,
+    out_path: str,
+    title: Optional[str] = None,
+) -> str:
+    """
+    Backwards-compatible helper retained for callers expecting the old API.
+    """
+    return save_docx_from_markdown_sections(markdown_text, out_path, title=title)
