@@ -122,7 +122,11 @@ def normalize_text(s: str) -> str:
         .replace("’", "'")
         .replace("‘", "'")
     )
-    s = re.sub(r"\b(Mme|Mlle|Me|Ma(?:ître|itre)|Dr|Pr|M\.)\s?(?=[A-Za-zÀ-ÖØ-öø-ÿ])", r"\1 ", s)
+    s = re.sub(
+        r"\b(Mme|Mlle|Me|Ma(?:ître|itre)|Dr|Pr|M\.)\s?(?=[A-ZÀ-ÖØ-Þ])",
+        r"\1 ",
+        s,
+    )
     return s
 
 
