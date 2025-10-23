@@ -157,6 +157,7 @@ def test_long_text_chunked_roundtrip_with_llm_validation(ollama_settings):
     assert mapping["summary"]["EMAIL"] >= 1
     assert mapping["summary"]["PHONE"] >= 2
     assert "Me <PER" not in anon_text
+    assert "NovaLyra" not in anon_text
 
     restored = deanonymize_text(anon_text, mapping, restore="canonical")
 
@@ -168,3 +169,6 @@ def test_long_text_chunked_roundtrip_with_llm_validation(ollama_settings):
 
     person_entities = [entity for entity in mapping["entities"] if entity["type"] == "PERSON"]
     assert any("Mehdi Rahmani" in entity.get("mentions", []) for entity in person_entities)
+
+    org_entities = [entity for entity in mapping["entities"] if entity["type"] == "ORGANIZATION"]
+    assert any("Conseil NovaLyra" in entity.get("mentions", []) or "NovaLyra" in entity.get("mentions", []) for entity in org_entities)

@@ -60,6 +60,11 @@ STRUCTURED_REGEX_SPECS: Sequence[Tuple[str, re.Pattern]] = [
     ("DATE", DATE_RE),
 ]
 
+TITLECASE_TAIL_RE = re.compile(
+    r"\s+(?:[dD]'|[dD]e|[dD]u|[dD]es|[lL]'|[lL]a|[lL]e|[lL]es|[aA]ux|[aA]u|&|et)?\s*[A-ZÀ-ÖØ-öø-ÿ][\w’\-]+",
+    re.UNICODE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -327,6 +332,29 @@ def merge_and_dedup_spans(spans: List[Dict]) -> List[Dict]:
     return result
 
 
+def expand_titlecase_spans(text: str, spans: List[Dict]) -> List[Dict]:
+    """
+    Extend PERSON/ORG spans to include immediately adjacent title-cased tokens
+    (e.g. capture ``NovaLyra`` when the model only tagged ``Conseil``).
+    """
+    if not spans:
+        return spans
+    for span in spans:
+        if span.get("type") not in {"PER", "ORG"}:
+            continue
+        end = span["end"]
+        while True:
+            match = TITLECASE_TAIL_RE.match(text, end)
+            if not match:
+                break
+            tail = match.group(0)
+            if not tail or not re.search(r"[A-ZÀ-ÖØ-öø-ÿ][\w’\-]+", tail):
+                break
+            end = match.end()
+        span["end"] = end
+    return spans
+
+
 # def apply_masks(text: str, spans: List[Dict]) -> Tuple[str, List[Dict]]:
 #     tag_counter: Dict[str, int] = {}
 #     span_indices = sorted(enumerate(spans), key=lambda item: item[1]["start"], reverse=True)
@@ -388,7 +416,8 @@ def collect_spans_by_blocks(text: str, blocks: Sequence[Dict], ner_pipe, cfg: Se
             span["start"] += base
             span["end"] += base
         spans.extend(ner_spans + rx_spans)
-    return merge_and_dedup_spans(spans)
+    merged = merge_and_dedup_spans(spans)
+    return expand_titlecase_spans(text, merged)
 
 
 # ---------------------------------------------------------------------------
