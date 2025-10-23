@@ -60,6 +60,7 @@ dependencies = [
   "docx-python>=0.1.0",
   "pypandoc-binary>=1.15",
   "sacremoses>=0.1.1",
+  "pypandoc>=1.15",
 ]
 
 [project.optional-dependencies]

@@ -15,6 +15,41 @@ import src.asr_jetson.postprocessing.meeting_report as meeting_report_mod
 
 from docx import Document
 
+_MINIMAL_PDF_BYTES = (
+    b"%PDF-1.4\n"
+    b"1 0 obj<<>>\nendobj\n"
+    b"xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n"
+    b"trailer<< /Size 2 >>\nstartxref\n44\n%%EOF\n"
+)
+
+
+@pytest.fixture
+def fake_pandoc_conversion(monkeypatch):
+    """
+    Remplace la conversion pypandoc par un rendu local minimal pour les tests.
+    """
+
+    def _fake_convert(markdown_text: str, to: str, out_path):
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if to == "docx":
+            doc = Document()
+            for line in markdown_text.splitlines():
+                if line.startswith("### "):
+                    doc.add_heading(line[4:].strip(), level=2)
+                elif line.strip():
+                    doc.add_paragraph(line.strip())
+                else:
+                    doc.add_paragraph("")
+            doc.save(path)
+        elif to == "pdf":
+            path.write_bytes(_MINIMAL_PDF_BYTES)
+        else:
+            path.write_text(markdown_text, encoding="utf-8")
+
+    monkeypatch.setattr(meeting_report_mod, "_convert_markdown_with_pandoc", _fake_convert)
+    return _fake_convert
+
 
 @pytest.fixture
 def temp_project(tmp_path: Path):
@@ -103,7 +138,7 @@ def _fake_llm_output():
 
 
 def test_generate_meeting_report_end_to_end_no_network(
-    temp_project, monkeypatch
+    temp_project, monkeypatch, fake_pandoc_conversion
 ):
     """
     Test end-to-end du rapport :
@@ -157,14 +192,20 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "report_anonymized_txt" in result
     assert "report_txt" in result
     assert "report_docx" in result
+    assert "report_pdf" in result
+    assert "report_markdown" in result
 
     p_anon = Path(result["report_anonymized_txt"])
     p_txt = Path(result["report_txt"])
     p_docx = Path(result["report_docx"])
+    p_pdf = Path(result["report_pdf"])
+    p_md = Path(result["report_markdown"])
 
     assert p_anon.exists(), "Le .txt anonymisé du rapport doit exister"
     assert p_txt.exists(), "Le .txt désanonymisé du rapport doit exister"
     assert p_docx.exists(), "Le .docx du rapport doit exister"
+    assert p_pdf.exists(), "Le .pdf du rapport doit exister"
+    assert p_md.exists(), "Le .md du rapport doit exister"
 
     # === 5) Contenu des TXT ===
     anon_text = p_anon.read_text(encoding="utf-8")

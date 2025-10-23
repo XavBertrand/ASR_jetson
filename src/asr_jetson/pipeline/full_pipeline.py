@@ -323,63 +323,62 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "report_anonymized_txt": None,
         "report_txt": None,
         "report_docx": None,
+        "report_markdown": None,
+        "report_pdf": None,
     }
 
-    if cfg.anonymize:
-        base_text = out_txt.read_text(encoding="utf-8")
+    base_text = out_txt.read_text(encoding="utf-8")
 
-        anon_settings = AnonymizerSettings(
-            model_id=cfg.anon_model,
-            device=_resolve_transformers_device(cfg.anon_device),
-            ollama_base_url=cfg.anon_ollama_url,
-            llm_model=cfg.anon_llm_model,
-            ollama_timeout=int(cfg.anon_ollama_timeout),
-            enable_llm_qc=bool(cfg.anon_enable_llm_qc),
+    anon_settings = AnonymizerSettings(
+        model_id=cfg.anon_model,
+        device=_resolve_transformers_device(cfg.anon_device),
+        ollama_base_url=cfg.anon_ollama_url,
+        llm_model=cfg.anon_llm_model,
+        ollama_timeout=int(cfg.anon_ollama_timeout),
+        enable_llm_qc=bool(cfg.anon_enable_llm_qc),
+    )
+
+    catalog_entries = None
+    if cfg.anon_catalog:
+        catalog_path = cfg.anon_catalog
+        if not catalog_path.is_absolute():
+            catalog_path = (root_dir / catalog_path).resolve()
+        catalog_entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
+
+    anon_text, mapping = anonymize_text(
+        base_text,
+        settings=anon_settings,
+        catalog_entries=catalog_entries,
+        catalog_default_label=cfg.anon_catalog_label,
+        catalog_as_person=bool(cfg.anon_catalog_as_person),
+        max_block_chars=int(cfg.anon_max_block_chars),
+        max_block_sents=int(cfg.anon_max_block_sents),
+    )
+
+    out_txt_anon.write_text(anon_text, encoding="utf-8")
+    out_mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Send the anonymised version to the LLM for clean-up.
+    clean_text_with_llm(input_txt=out_txt_anon, output_txt=out_txt_anon_clean)
+
+    # Re-identify (de-anonymise) the LLM-cleaned text.
+    anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
+    deanonymized = deanonymize_text(anon_clean_text, mapping, restore="canonical")
+    out_txt_clean.write_text(deanonymized, encoding="utf-8")
+
+    if cfg.generate_meeting_report:
+        prompts_path = cfg.meeting_report_prompts
+        if not prompts_path.is_absolute():
+            prompts_path = (root_dir / prompts_path).resolve()
+        if not prompts_path.exists():
+            raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
+        report_outputs = generate_meeting_report(
+            anonymized_txt_path=out_txt_anon_clean,
+            mapping_json_path=out_mapping_json,
+            prompts_json_path=prompts_path,
+            prompt_key=cfg.meeting_report_prompt_key,
         )
 
-        catalog_entries = None
-        if cfg.anon_catalog:
-            catalog_path = cfg.anon_catalog
-            if not catalog_path.is_absolute():
-                catalog_path = (root_dir / catalog_path).resolve()
-            catalog_entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
-
-        anon_text, mapping = anonymize_text(
-            base_text,
-            settings=anon_settings,
-            catalog_entries=catalog_entries,
-            catalog_default_label=cfg.anon_catalog_label,
-            catalog_as_person=bool(cfg.anon_catalog_as_person),
-            max_block_chars=int(cfg.anon_max_block_chars),
-            max_block_sents=int(cfg.anon_max_block_sents),
-        )
-
-        out_txt_anon.write_text(anon_text, encoding="utf-8")
-        out_mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        # Send the anonymised version to the LLM for clean-up.
-        clean_text_with_llm(input_txt=out_txt_anon, output_txt=out_txt_anon_clean)
-
-        # Re-identify (de-anonymise) the LLM-cleaned text.
-        anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
-        deanonymized = deanonymize_text(anon_clean_text, mapping, restore="canonical")
-        out_txt_clean.write_text(deanonymized, encoding="utf-8")
-
-        if cfg.generate_meeting_report:
-            prompts_path = cfg.meeting_report_prompts
-            if not prompts_path.is_absolute():
-                prompts_path = (root_dir / prompts_path).resolve()
-            if not prompts_path.exists():
-                raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-            report_outputs = generate_meeting_report(
-                anonymized_txt_path=out_txt_anon_clean,
-                mapping_json_path=out_mapping_json,
-                prompts_json_path=prompts_path,
-                prompt_key=cfg.meeting_report_prompt_key,
-            )
-    else:
-        # Original path without anonymisation.
-        clean_text_with_llm(input_txt=out_txt, output_txt=out_txt_clean)
 
     torch.cuda.empty_cache()
     gc.collect()

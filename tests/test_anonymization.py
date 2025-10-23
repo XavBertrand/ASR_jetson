@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -172,3 +173,50 @@ def test_long_text_chunked_roundtrip_with_llm_validation(ollama_settings):
 
     org_entities = [entity for entity in mapping["entities"] if entity["type"] == "ORGANIZATION"]
     assert any("Conseil NovaLyra" in entity.get("mentions", []) or "NovaLyra" in entity.get("mentions", []) for entity in org_entities)
+
+
+def test_anonymize_preserves_speaker_labels(tmp_path):
+    sample = (
+        "SPEAKER_1 : D'accord. C'est pas grave, le début on n'en reparlera pas. "
+        "Mais voilà, c'est des difficultés surtout dans la gestion dans les entreprises, "
+        "parce que les particuliers c'est assez facile, mais les entreprises où il y a beaucoup… "
+        "Comme Udaf ou Detail Group où il y a plusieurs… Voilà, Migmeca, je crois que c'était chez Migmeca.\n"
+        "SPEAKER_2 : Donc c'est un besoin de plus de clarté dans les demandes en fait, "
+        "surtout dans les dossiers où il y a multiples salariés.\n"
+    )
+
+    cfg = Settings(enable_llm_qc=False)
+
+    def fake_ner(block_text: str):
+        outputs = []
+        for match in re.finditer(r"SPEAKER(?:_\d+)?", block_text):
+            outputs.append(
+                {
+                    "start": match.start(),
+                    "end": match.end(),
+                    "entity_group": "PER",
+                    "score": 0.99,
+                }
+            )
+        for match in re.finditer(r"Udaf|Detail Group|Migmeca", block_text, re.IGNORECASE):
+            outputs.append(
+                {
+                    "start": match.start(),
+                    "end": match.end(),
+                    "entity_group": "ORG",
+                    "score": 0.99,
+                }
+            )
+        return outputs
+
+    anon_text, mapping = anonymize_text(
+        sample,
+        settings=cfg,
+        ner_pipeline=fake_ner,
+    )
+
+    assert anon_text.splitlines()[0].startswith("SPEAKER_1"), "Les labels de locuteur doivent rester intacts."
+    assert "SPEAKER_2" in anon_text, "Les labels de locuteur doivent rester intacts."
+    assert "<ORG_" in anon_text, "Les organisations doivent être anonymisées."
+    assert "Detail Group" not in anon_text
+    assert mapping["summary"]["ORGANIZATION"] >= 1

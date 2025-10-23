@@ -1,13 +1,22 @@
 from __future__ import annotations
+import os
 from pathlib import Path
 from typing import Optional
 import json
 
 import asr_jetson.postprocessing.mistral_client as mistral_client
 from asr_jetson.postprocessing.anonymizer import deanonymize_text
-from asr_jetson.postprocessing.docx_export import export_markdown_docx_auto
-
 import re
+
+try:  # pragma: no cover - optional dependency
+    import pypandoc  # type: ignore
+
+    _HAS_PYPANDOC = True
+    _PYPANDOC_IMPORT_ERROR: Optional[Exception] = None
+except Exception as _err:  # pragma: no cover - executed when pypandoc missing
+    pypandoc = None  # type: ignore
+    _HAS_PYPANDOC = False
+    _PYPANDOC_IMPORT_ERROR = _err
 
 _TAG_NORM_RE = re.compile(r"<\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^>]*>|\{\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^}]*\}", re.UNICODE)
 
@@ -31,6 +40,29 @@ def _normalize_llm_placeholders(text: str) -> str:
     text = text.replace("}>", ">").replace("}", ">")
     return _TAG_NORM_RE.sub(_repl, text)
 
+def _convert_markdown_with_pandoc(markdown_text: str, to: str, out_path: Path) -> None:
+    """
+    Convert markdown text to the requested ``to`` format using pypandoc.
+    """
+    if not _HAS_PYPANDOC:
+        raise RuntimeError(
+            "pypandoc is required to export meeting reports "
+            f"({to}) but is unavailable."
+        ) from _PYPANDOC_IMPORT_ERROR
+
+    args = ["--standalone"]
+    if to == "pdf":
+        pdf_engine = os.getenv("PYPANDOC_PDF_ENGINE")
+        if pdf_engine:
+            args.extend(["--pdf-engine", pdf_engine])
+    pypandoc.convert_text(  # type: ignore[call-arg]
+        markdown_text,
+        to=to,
+        format="md",
+        outputfile=str(out_path),
+        extra_args=args,
+    )
+
 def generate_meeting_report(
     anonymized_txt_path: Path,
     mapping_json_path: Path,
@@ -43,7 +75,7 @@ def generate_meeting_report(
     1) Lit la transcription anonymisée (txt)
     2) Lance Mistral Large avec le prompt JSON (key configurable)
     3) Désanonymise le rapport LLM via mapping
-    4) Exporte TXT (anon + désanon) et DOCX
+    4) Exporte TXT/Markdown et génère DOCX+PDF via pypandoc
     """
     out_dir = out_dir or anonymized_txt_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -86,23 +118,27 @@ def generate_meeting_report(
     outputs_root.mkdir(parents=True, exist_ok=True)
     reports_dir = outputs_root / "reports"  # text exports
     docx_dir = outputs_root / "docx"  # docx exports
+    pdf_dir = outputs_root / "pdf"
     reports_dir.mkdir(parents=True, exist_ok=True)
     docx_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
 
     out_txt_anon = reports_dir / f"{base}_meeting_report_anonymized.txt"
     out_txt = reports_dir / f"{base}_meeting_report.txt"
+    out_md = reports_dir / f"{base}_meeting_report.md"
     out_docx = docx_dir / f"{base}_meeting_report.docx"
+    out_pdf = pdf_dir / f"{base}_meeting_report.pdf"
 
     out_txt_anon.write_text(analysis_anonymized, encoding="utf-8")
     out_txt.write_text(analysis_deanonymized, encoding="utf-8")
-    export_markdown_docx_auto(
-        markdown_text=analysis_deanonymized,
-        out_path=str(out_docx),
-        title=f"Compte rendu — {base}",
-    )
+    out_md.write_text(analysis_deanonymized, encoding="utf-8")
+    _convert_markdown_with_pandoc(analysis_deanonymized, to="docx", out_path=out_docx)
+    _convert_markdown_with_pandoc(analysis_deanonymized, to="pdf", out_path=out_pdf)
 
     return {
         "report_anonymized_txt": str(out_txt_anon),
         "report_txt": str(out_txt),
+        "report_markdown": str(out_md),
         "report_docx": str(out_docx),
+        "report_pdf": str(out_pdf),
     }
