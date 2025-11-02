@@ -51,7 +51,7 @@ class TransformerAnonymizer:
         model_name: str = "Jean-Baptiste/camembert-ner",
         whitelist: List[str] | None = None,
         domain_entities: Dict[str, List[str]] | None = None,
-        device: int | str | None = -1,
+        device: int | str | None = "cuda",
     ):
         """
         Args:
