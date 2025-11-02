@@ -26,9 +26,16 @@ _PANDOC_MD_FORMAT = "markdown+pipe_tables+grid_tables+multiline_tables+table_cap
 _PREFERRED_SANS_FONTS: Tuple[str, ...] = ("Arial", "Calibri", "Liberation Sans", "DejaVu Sans")
 _ROLE_KEYWORD_HINTS = {
     "delphine": "Delphine (avocat gérante)",
-    "marie": "Collaborateur",
+    "marie": "Delphine (avocat gérante)",
     "marine": "Collaborateur",
     "sylvie": "Collaborateur",
+}
+_PERSON_CANONICAL_ALIASES = {
+    "marie": "Delphine",
+    "delphine": "Delphine",
+    "marine": "Marine",
+    "sylvie": "Sylvie",
+    "marine.": "Marine",
 }
 
 def _normalize_llm_placeholders(text: str) -> str:
@@ -189,7 +196,9 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
         normalized_tag = _normalize_tag(raw_tag)
         if not normalized_tag:
             continue
-        canonical_key = (canonical or "").strip().lower() or normalized_tag
+        canonical_clean = (canonical or "").strip()
+        canonical_alias = _PERSON_CANONICAL_ALIASES.get(canonical_clean.lower(), canonical_clean)
+        canonical_key = canonical_alias.lower() if canonical_alias else normalized_tag
         primary_tag = canonical_to_tag.setdefault(canonical_key, normalized_tag)
         if primary_tag != normalized_tag:
             replacements[normalized_tag] = primary_tag
@@ -208,8 +217,10 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
         if not normalized_tag:
             continue
         normalized_tag = replacements.get(normalized_tag, normalized_tag)
-        if canonical and normalized_tag not in new_reverse_map:
-            new_reverse_map[normalized_tag] = canonical
+        canonical_clean = (canonical or "").strip()
+        canonical_alias = _PERSON_CANONICAL_ALIASES.get(canonical_clean.lower(), canonical_clean)
+        if canonical_alias and normalized_tag not in new_reverse_map:
+            new_reverse_map[normalized_tag] = canonical_alias
 
     new_entities: Dict[str, Any] = {}
     for raw_tag, info in entities.items():
@@ -218,16 +229,21 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
             continue
         normalized_tag = replacements.get(normalized_tag, normalized_tag)
         existing = new_entities.get(normalized_tag)
+        info_copy = dict(info)
+        reverse_alias = new_reverse_map.get(normalized_tag)
+        if reverse_alias and isinstance(info_copy.get("values"), list):
+            values = [reverse_alias] + [val for val in info_copy["values"] if val != reverse_alias]
+            info_copy["values"] = list(dict.fromkeys(values))
         if existing:
             merged_values = list(
                 dict.fromkeys(
                     (existing.get("values", []) or [])
-                    + (info.get("values", []) or [])
+                    + (info_copy.get("values", []) or [])
                 )
             )
             existing["values"] = merged_values
         else:
-            new_entities[normalized_tag] = dict(info)
+            new_entities[normalized_tag] = info_copy
 
     mapping["reverse_map"] = new_reverse_map
     mapping["entities"] = new_entities
