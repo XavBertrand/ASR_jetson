@@ -9,7 +9,7 @@ import json
 import os
 import torch
 import gc
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 
 # === Imports from the project modules ===
 # Denoising
@@ -23,13 +23,9 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
-from asr_jetson.postprocessing.anonymizer import (
-    Settings as AnonymizerSettings,
-    anonymize_text,
-    deanonymize_text,
-    load_catalog,
-)
+from asr_jetson.postprocessing.anonymizer import load_catalog
 from asr_jetson.postprocessing.meeting_report import generate_meeting_report
+from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 
 
 # --- Helpers ---
@@ -106,7 +102,7 @@ class PipelineConfig:
     anon_catalog_fuzzy: int = 90  # legacy knob (unused with the Ollama anonymizer)
     anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
     anon_ollama_url: str = "http://localhost:11434"
-    anon_llm_model: str = "mistral"
+    anon_llm_model: str = "alibayram/ministral-3b-instruct:latest"
     anon_ollama_timeout: int = 30
     anon_enable_llm_qc: bool = True
     anon_max_block_chars: int = 1200
@@ -114,6 +110,7 @@ class PipelineConfig:
     generate_meeting_report: bool = True
     meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
     meeting_report_prompt_key: str = "meeting_analysis"
+    presidio_python: Path = Path(".venv-presidio/bin/python")
 
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
@@ -244,7 +241,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     _ensure_parent(cfg.out_dir / "json")
     _ensure_parent(cfg.out_dir / "srt")
 
-    root_dir = Path(__file__).resolve().parents[3]
+    root_dir = Path(__file__).resolve().parents[2]
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "json"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
@@ -310,14 +307,14 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     # )
     write_dialogue_txt(labeled_for_txt, out_txt)
 
-    # === POST: Anonymisation -> LLM -> Re-identification ===
-    pp, ff = os.path.split(out_txt)
-    ff, ee = os.path.splitext(ff)
+    # === POST: Anonymisation / Clean / Report ===
+    _, txt_name = os.path.split(out_txt)
+    txt_stem, _ = os.path.splitext(txt_name)
 
-    out_txt_anon = root_dir / cfg.out_dir / "txt" / f"{ff}_anon.txt"
-    out_txt_anon_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_anon_clean.txt"
-    out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{ff}_clean.txt"
-    out_mapping_json = root_dir / cfg.out_dir / "json" / f"{ff}_anon_mapping.json"
+    out_txt_anon = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_anon.txt"
+    out_txt_anon_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_anon_clean.txt"
+    out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_clean.txt"
+    out_mapping_json = root_dir / cfg.out_dir / "json" / f"{txt_stem}_anon_mapping.json"
 
     report_outputs: Dict[str, Optional[str]] = {
         "report_anonymized_txt": None,
@@ -328,57 +325,67 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     }
 
     base_text = out_txt.read_text(encoding="utf-8")
+    out_txt_clean.write_text(base_text, encoding="utf-8")
 
-    anon_settings = AnonymizerSettings(
-        model_id=cfg.anon_model,
-        device=_resolve_transformers_device(cfg.anon_device),
-        ollama_base_url=cfg.anon_ollama_url,
-        llm_model=cfg.anon_llm_model,
-        ollama_timeout=int(cfg.anon_ollama_timeout),
-        enable_llm_qc=bool(cfg.anon_enable_llm_qc),
-    )
+    if cfg.anonymize:
+        domain_entities: Dict[str, List[str]] = {}
+        if cfg.anon_catalog:
+            catalog_path = Path(cfg.anon_catalog)
+            if not catalog_path.is_absolute():
+                catalog_path = (root_dir / catalog_path).resolve()
+            entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
+            tmp: Dict[str, Set[str]] = {}
+            for entry in entries:
+                pattern = entry.get("pattern") or ""
+                if not pattern.strip():
+                    continue
+                label = entry.get("label") or cfg.anon_catalog_label
+                if cfg.anon_catalog_as_person:
+                    label = "PERSON"
+                normalized = TransformerAnonymizer._normalize_type(label)
+                tmp.setdefault(normalized, set()).add(pattern.strip())
+            domain_entities = {label: sorted(values) for label, values in tmp.items() if values}
 
-    catalog_entries = None
-    if cfg.anon_catalog:
-        catalog_path = cfg.anon_catalog
-        if not catalog_path.is_absolute():
-            catalog_path = (root_dir / catalog_path).resolve()
-        catalog_entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
+        anonymizer = TransformerAnonymizer(
+            model_name=cfg.anon_model,
+            domain_entities=domain_entities or None,
+            device=_resolve_transformers_device(cfg.anon_device),
+        )
+        anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
 
-    anon_text, mapping = anonymize_text(
-        base_text,
-        settings=anon_settings,
-        catalog_entries=catalog_entries,
-        catalog_default_label=cfg.anon_catalog_label,
-        catalog_as_person=bool(cfg.anon_catalog_as_person),
-        max_block_chars=int(cfg.anon_max_block_chars),
-        max_block_sents=int(cfg.anon_max_block_sents),
-    )
+        out_txt_anon.write_text(anonymized_text, encoding="utf-8")
 
-    out_txt_anon.write_text(anon_text, encoding="utf-8")
-    out_mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
+        if cfg.anon_enable_llm_qc:
+            try:
+                clean_text_with_llm(out_txt_anon, out_txt_anon_clean)
+            except Exception as exc:  # pragma: no cover - depends on external services
+                print(f"⚠️ LLM clean-up failed: {exc}")
+                out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
+        else:
+            out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
 
-    # Send the anonymised version to the LLM for clean-up.
-    clean_text_with_llm(input_txt=out_txt_anon, output_txt=out_txt_anon_clean)
-
-    # Re-identify (de-anonymise) the LLM-cleaned text.
-    anon_clean_text = out_txt_anon_clean.read_text(encoding="utf-8")
-    deanonymized = deanonymize_text(anon_clean_text, mapping, restore="canonical")
-    out_txt_clean.write_text(deanonymized, encoding="utf-8")
-
-    if cfg.generate_meeting_report:
-        prompts_path = cfg.meeting_report_prompts
-        if not prompts_path.is_absolute():
-            prompts_path = (root_dir / prompts_path).resolve()
-        if not prompts_path.exists():
-            raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-        report_outputs = generate_meeting_report(
-            anonymized_txt_path=out_txt_anon_clean,
-            mapping_json_path=out_mapping_json,
-            prompts_json_path=prompts_path,
-            prompt_key=cfg.meeting_report_prompt_key,
+        out_mapping_json.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
+        if cfg.generate_meeting_report:
+            prompts_path = cfg.meeting_report_prompts
+            if not prompts_path.is_absolute():
+                prompts_path = (root_dir / prompts_path).resolve()
+            if not prompts_path.exists():
+                raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
+            report_outputs = generate_meeting_report(
+                anonymized_txt_path=out_txt_anon_clean,
+                mapping_json_path=out_mapping_json,
+                prompts_json_path=prompts_path,
+                prompt_key=cfg.meeting_report_prompt_key,
+            )
+    else:
+        # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
+        out_txt_anon.write_text(base_text, encoding="utf-8")
+        out_txt_anon_clean.write_text(base_text, encoding="utf-8")
+        out_mapping_json.write_text("{}", encoding="utf-8")
 
     torch.cuda.empty_cache()
     gc.collect()
