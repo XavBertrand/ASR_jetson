@@ -1,18 +1,18 @@
 # Lightweight ASR Pipeline with Diarization
 
 This repository provides a **lightweight, modular, and efficient Automatic Speech Recognition (ASR) pipeline** designed to run locally on both desktop GPUs and edge devices such as the **Jetson Orin Nano**.
-It combines optional noise suppression, speaker diarization, transcription, and post-processing in a single, end-to-end workflow driven by Pyannote + Faster-Whisper.
+It combines optional noise suppression, VAD, speaker diarization, transcription, anonymization, and meeting-report post-processing in a single, end-to-end workflow driven by Pyannote + Faster-Whisper.
 
 ---
 
 ## ✨ Features
 
-* 🎧 **Denoising (optional)** via [RNNoise](https://github.com/xiph/rnnoise).
-* 👥 **Speaker diarization** fully powered by [Pyannote Audio](https://github.com/pyannote/pyannote-audio).
-* 📝 **Automatic Speech Recognition (ASR)** using [FasterWhisper](https://github.com/SYSTRAN/faster-whisper).
-* ⚡ **Optimized for Jetson Orin Nano**: designed to run locally with CUDA/TensorRT acceleration.
-* 🧱 **uv + pyproject.toml** build system (no `requirements.txt` needed).
-* 🥪 Unit and integration tests with pytest.
+* 🎧 Optional denoising with [RNNoise](https://github.com/xiph/rnnoise) and WAV normalization.
+* 🔇 Voice activity detection (Silero/Marblenet) to trim silence before diarization.
+* 👥 Speaker diarization powered by [Pyannote Audio](https://github.com/pyannote/pyannote-audio).
+* 📝 Faster-Whisper transcription tuned for Jetson Orin and desktop GPUs.
+* 🛡 Post-processing for anonymization, LLM-clean transcripts, and meeting reports.
+* 🧱 Reproducible `uv` workspace with unit + integration tests.
 
 ---
 
@@ -22,27 +22,33 @@ It combines optional noise suppression, speaker diarization, transcription, and 
 ASR_jetson/
 ├── src/
 │   └── asr_jetson/
-│       ├── preprocessing/        # RNNoise wrapper + audio conversion helpers
-│       ├── diarization/          # Pyannote-based diarization pipeline
-│       ├── asr/                  # FasterWhisper helpers
-│       ├── postprocessing/       # Text cleaning, anonymisation, and report generation
-│       ├── pipeline/             # End-to-end pipeline orchestration (core + CLI)
-│       └── utils/                # Configs, logging helpers
+│       ├── api/                 # FastAPI draft entrypoints
+│       ├── asr/                 # Faster-Whisper model + decoding helpers
+│       ├── config/              # Config dataclasses and prompt templates
+│       ├── diarization/         # Pyannote diarization pipeline
+│       ├── pipeline/            # End-to-end orchestration + CLI
+│       ├── postprocessing/      # Anonymization, LLM clean-up, meeting reports
+│       ├── preprocessing/       # Audio conversion + RNNoise interface
+│       ├── utils/               # Shared helpers (logging, paths, metrics)
+│       └── vad/                 # Silero / Marblenet voice activity detection
 │
-├── configs/                      # (optional) runtime YAML configs
+├── configs/                     # Runtime configuration samples
 │   ├── dev.yaml
 │   └── jetson.yaml
 │
-├── tests/                        # Unit & integration tests
-│   ├── test_pipeline.py
-│   └── data/
+├── tests/                       # Pytest suite and fixtures
+│   ├── data/                    # Sample audio + JSON fixtures
+│   ├── test_full_pipeline.py
+│   ├── test_meeting_report.py
+│   ├── test_transformer_anonymizer.py
+│   └── ...
 │
-├── docker/
-│   ├── Dockerfile                # Multi-arch (x86_64 + ARM64) build
-│   └── Dockerfile.jetson         # Jetson Orin Nano deployment
-│
-├── pyproject.toml                # Dependencies, scripts, and settings
-├── uv.lock                       # uv dependency lock file
+├── scripts/                     # Utility scripts (export, profiling, tooling)
+├── docker/                      # Dockerfiles for desktop + Jetson builds
+├── models/                      # Local model cache (gitignored)
+├── outputs/                     # Generated transcripts / reports (gitignored)
+├── pyproject.toml               # Project metadata, extras, scripts
+├── uv.lock                      # uv dependency lock file
 └── README.md
 ```
 
@@ -52,11 +58,12 @@ ASR_jetson/
 
 ### Prerequisites
 
-* Python ≥ 3.10
+* Python ≥ 3.11
 * CUDA-enabled GPU (recommended for realtime / large models)
 * [ffmpeg](https://ffmpeg.org/) in PATH (required for audio conversion + RNNoise)
 * [uv](https://github.com/astral-sh/uv) installed (`pip install uv`)
-* (For diarization) a valid Hugging Face token stored in `HUGGINGFACE_TOKEN`
+* `HUGGINGFACE_TOKEN` exported for private Pyannote pipelines
+* Optional: `MISTRAL_API_KEY` when generating meeting reports via Mistral
 
 ### Setup
 
@@ -64,14 +71,16 @@ ASR_jetson/
 git clone https://github.com/XavBertrand/ASR_jetson.git
 cd ASR_jetson
 
-# Install dependencies (desktop Linux / WSL with CUDA 12.4 wheels)
-uv sync --extra dev --extra media --extra gpu-linux
-
-# Jetson (aarch64) simply omits the gpu-linux extra:
-# uv sync --extra dev --extra media --extra gpu-jetson
+# Install dependencies (pick the variant matching your hardware)
+uv sync --extra dev --extra media                                 # CPU-only
+# uv sync --extra dev --extra media --extra gpu-linux             # Desktop GPU (CUDA)
+# uv sync --extra dev --extra media --extra gpu-jetson            # Jetson Orin / aarch64
 
 # Authenticate with Hugging Face once for Pyannote access
 export HUGGINGFACE_TOKEN=hf_xxx
+
+# Optional: enable meeting reports backed by Mistral
+export MISTRAL_API_KEY=xxxx
 ```
 
 ---
@@ -84,37 +93,35 @@ export HUGGINGFACE_TOKEN=hf_xxx
 uv run asr-pipeline \
   --audio path/to/file.wav \
   --out-dir outputs \
+  --device cuda \
+  --denoise \
   --speakers 2 \
-  --pyannote-pipeline pyannote/speaker-diarization-3.1
+  --whisper-model h2oai/faster-whisper-large-v3-turbo \
+  --pyannote-pipeline pyannote/speaker-diarization-community-1 \
+  --pyannote-token "$HUGGINGFACE_TOKEN"
 ```
 
-Or directly:
-
-```bash
-uv run python -m asr_jetson --audio path/to/file.wav
-
-# Or pass a token explicitly (useful in CI)
-uv run asr-pipeline --audio file.wav --pyannote-token "$HUGGINGFACE_TOKEN"
-```
+* Switch `--device cpu` when CUDA is unavailable.
+* Meeting reports require anonymization (enabled by default) and `MISTRAL_API_KEY`.
+* For debugging, run `uv run python -m asr_jetson.pipeline.cli ...`.
 
 ### Example Output
 
 ```json
-[
-  {
-    "speaker": "SPEAKER_1",
-    "start": 0.5,
-    "end": 3.2,
-    "text": "Hello everyone, thanks for joining the meeting today."
-  },
-  {
-    "speaker": "SPEAKER_2",
-    "start": 3.3,
-    "end": 5.7,
-    "text": "Good morning, let's get started."
-  }
-]
+{
+  "json": "outputs/json/sample_pyannote_..._turbo.json",
+  "srt": "outputs/srt/sample_pyannote_..._turbo.srt",
+  "txt": "outputs/txt/sample_pyannote_..._turbo.txt",
+  "txt_llm": "outputs/txt/sample_pyannote_..._turbo_clean.txt",
+  "txt_anon": "outputs/txt/sample_pyannote_..._turbo_anon.txt",
+  "txt_anon_llm": "outputs/txt/sample_pyannote_..._turbo_anon_clean.txt",
+  "anon_mapping": "outputs/json/sample_pyannote_..._turbo_anon_mapping.json",
+  "report_docx": "outputs/reports/sample_meeting_report.docx",
+  "report_markdown": "outputs/reports/sample_meeting_report.md"
+}
 ```
+
+Running the pipeline writes diarized segments, transcripts, anonymized variants, and report artifacts under `outputs/`.
 
 ---
 
@@ -187,10 +194,10 @@ Integration tests rely on Pyannote and may require downloading weights from Hugg
 
 ## 🖊 Roadmap
 
-* [ ] Add support for **online streaming transcription**
-* [ ] Integrate **FastAPI service** for remote inference
-* [ ] Add **speaker adaptation** (personalized profiles)
-* [ ] Extend diarization with **overlap detection**
+* [ ] Enable low-latency / streaming inference for long recordings.
+* [ ] Promote the FastAPI service into a deployable microservice.
+* [ ] Extend anonymization to handle additional languages and entity types.
+* [ ] Validate TensorRT / INT8 pipelines on Jetson for faster inference.
 
 ---
 
@@ -199,15 +206,11 @@ Integration tests rely on Pyannote and may require downloading weights from Hugg
 MIT License. See [LICENSE](LICENSE) for details.
 
 ---
-
 ## 🙏 Acknowledgments
 
-* [RNNoise](https://github.com/xiph/rnnoise)
-* [Pyannote Audio](https://github.com/pyannote/pyannote-audio)
-* [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper)
-* [uv](https://github.com/astral-sh/uv) for the packaging workflow
-* [NVIDIA NeMo](https://github.com/NVIDIA/NeMo)
-* [Pyannote Audio](https://github.com/pyannote/pyannote-audio)
-* [Whisper & FasterWhisper](https://github.com/openai/whisper)
-* [RNNoise](https://github.com/xiph/rnnoise)
-* [uv](https://github.com/astral-sh/uv)
+* [RNNoise](https://github.com/xiph/rnnoise) for lightweight denoising.
+* [Pyannote Audio](https://github.com/pyannote/pyannote-audio) for speaker diarization.
+* [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) / CTranslate2 for fast ASR.
+* [Silero VAD](https://github.com/snakers4/silero-vad) and [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) for VAD models.
+* [uv](https://github.com/astral-sh/uv) for dependency management.
+* [Mistral AI](https://github.com/mistralai/mistral-client) for meeting report generation.
