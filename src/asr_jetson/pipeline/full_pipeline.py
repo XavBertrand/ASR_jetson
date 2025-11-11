@@ -170,9 +170,6 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     :returns: Dictionary containing intermediate segments and output artifact paths.
     :rtype: Dict[str, Any]
     """
-    if cfg.generate_meeting_report and not cfg.anonymize:
-        raise ValueError("Meeting report generation requires anonymisation to be enabled.")
-
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
 
     # Avoid CTranslate2 crashes by harmonising compute_type with the device.
@@ -241,7 +238,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     _ensure_parent(cfg.out_dir / "json")
     _ensure_parent(cfg.out_dir / "srt")
 
-    root_dir = Path(__file__).resolve().parents[2]
+    root_dir = Path(__file__).resolve().parents[3]
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "json"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
     os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
@@ -369,23 +366,24 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             encoding="utf-8",
         )
 
-        if cfg.generate_meeting_report:
-            prompts_path = cfg.meeting_report_prompts
-            if not prompts_path.is_absolute():
-                prompts_path = (root_dir / prompts_path).resolve()
-            if not prompts_path.exists():
-                raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-            report_outputs = generate_meeting_report(
-                anonymized_txt_path=out_txt_anon_clean,
-                mapping_json_path=out_mapping_json,
-                prompts_json_path=prompts_path,
-                prompt_key=cfg.meeting_report_prompt_key,
-            )
     else:
         # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
         out_txt_anon.write_text(base_text, encoding="utf-8")
         out_txt_anon_clean.write_text(base_text, encoding="utf-8")
         out_mapping_json.write_text("{}", encoding="utf-8")
+
+    if cfg.generate_meeting_report:
+        prompts_path = cfg.meeting_report_prompts
+        if not prompts_path.is_absolute():
+            prompts_path = (root_dir / prompts_path).resolve()
+        if not prompts_path.exists():
+            raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
+        report_outputs = generate_meeting_report(
+            anonymized_txt_path=out_txt_anon_clean,
+            mapping_json_path=out_mapping_json,
+            prompts_json_path=prompts_path,
+            prompt_key=cfg.meeting_report_prompt_key,
+        )
 
     torch.cuda.empty_cache()
     gc.collect()

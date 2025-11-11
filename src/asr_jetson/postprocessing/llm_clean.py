@@ -4,17 +4,57 @@ import os
 from pathlib import Path
 import json
 import re
+import tempfile
 import time
 import requests
 from typing import Iterator, Optional
 
+
+def _prepare_lt_home() -> str:
+    """
+    Ensure ``LT_HOME`` points to a writable, persistent cache directory.
+
+    The default /app/.cache path works inside our Docker image, but when the CLI
+    runs directly on a developer machine that path is often read-only, causing
+    ``language_tool_python`` to re-download LanguageTool into temporary folders
+    every time. By selecting a user-specific cache location we only download the
+    LanguageTool bundle once.
+    """
+    env_value = os.environ.get("LT_HOME")
+    candidates = []
+
+    if env_value:
+        candidates.append(Path(env_value))
+    else:
+        xdg_cache = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache:
+            candidates.append(Path(xdg_cache) / "LanguageTool")
+        candidates.append(Path.home() / ".cache" / "LanguageTool")
+        candidates.append(Path.cwd() / ".cache" / "LanguageTool")
+        candidates.append(Path(tempfile.gettempdir()) / "LanguageTool")
+
+    for path in candidates:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        os.environ["LT_HOME"] = str(path)
+        return str(path)
+
+    raise RuntimeError("Unable to prepare a writable LT_HOME directory.")
+
+
 # --- LanguageTool: persistent cache + shared global instance ---
-os.environ.setdefault("LT_HOME", "/app/.cache/LanguageTool")
+_prepare_lt_home()
 try:
     import language_tool_python
+
     _LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
-    LT_TOOL = language_tool_python.LanguageTool('fr', remote_server=_LT_ENDPOINT) if _LT_ENDPOINT \
-              else language_tool_python.LanguageTool('fr')
+    LT_TOOL = (
+        language_tool_python.LanguageTool("fr", remote_server=_LT_ENDPOINT)
+        if _LT_ENDPOINT
+        else language_tool_python.LanguageTool("fr")
+    )
 except Exception as _e:
     LT_TOOL = None
     print(f"[WARN] LanguageTool unavailable during import: {_e}")
