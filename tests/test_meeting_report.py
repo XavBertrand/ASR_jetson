@@ -13,7 +13,19 @@ from src.asr_jetson.postprocessing.meeting_report import generate_meeting_report
 import src.asr_jetson.postprocessing.mistral_client as mistral_client_mod
 import src.asr_jetson.postprocessing.meeting_report as meeting_report_mod
 
-from docx import Document
+try:
+    from docx import Document
+except Exception as exc:  # pragma: no cover - dépend de l'environnement CI
+    Document = None  # type: ignore
+    _DOCX_IMPORT_ERROR = exc
+else:
+    _DOCX_IMPORT_ERROR = None
+
+if Document is None:  # pragma: no cover - skip module si docx indisponible
+    pytest.skip(
+        f"python-docx (package 'docx') requis pour tester les exports meeting report: {_DOCX_IMPORT_ERROR}",
+        allow_module_level=True,
+    )
 
 _MINIMAL_PDF_BYTES = (
     b"%PDF-1.4\n"
