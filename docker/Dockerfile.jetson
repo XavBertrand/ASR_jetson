@@ -64,8 +64,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 
 ENV PATH="/root/.local/bin:$PATH"
 
-# Création du venv
-RUN uv venv /opt/venv
+# Installation d'un runtime Python 3.11 (compatible avec la contrainte du projet)
+RUN uv python install 3.11
+
+# Création du venv sur la base de Python 3.11
+RUN uv venv --python 3.11 /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
 
