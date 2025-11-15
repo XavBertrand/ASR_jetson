@@ -1,19 +1,27 @@
-# src/asr/transcribe.py
+"""High-level transcription helpers built on Faster-Whisper outputs."""
 from __future__ import annotations
 from pathlib import Path
-from tqdm import tqdm
-from typing import List, Dict, Any, Iterable, Tuple
-
+from typing import List, Dict, Any, Tuple
 
 
 def _sec(x_samples: int, sr: int = 16000) -> float:
+    """
+    Convert a sample count into seconds for a given sampling rate.
+
+    :param x_samples: Number of samples to convert.
+    :type x_samples: int
+    :param sr: Sampling rate in Hertz.
+    :type sr: int
+    :returns: Duration in seconds.
+    :rtype: float
+    """
     return x_samples / float(sr)
 
 
 # def transcribe_segments(model, wav_path, diar_segments, language=None):
 #     """
-#     Transcrit en s'appuyant sur les defaults stables de faster-whisper.
-#     Fenêtre audio par [start,end] pour réduire la charge côté encode().
+#     Transcribe using the stable defaults of Faster-Whisper.
+#     Audio windows are limited to [start, end] to reduce encoder load.
 #     """
 #     results = []
 #     for seg in diar_segments:
@@ -23,12 +31,12 @@ def _sec(x_samples: int, sr: int = 16000) -> float:
 #             continue
 #
 #         try:
-#             # Fenêtre : on passe bien la durée ciblée à faster-whisper
+#             # Window: request the exact duration from Faster-Whisper.
 #             segments, info = model.transcribe(
 #                 wav_path,
 #                 language=language,     # None = auto
 #                 task="transcribe",
-#                 vad_filter=False,      # VAD déjà faite en amont
+#                 vad_filter=False,      # VAD already applied upstream
 #                 chunk_length=15,       # petit chunk → moins de pression
 #                 word_timestamps=False,
 #             )
@@ -44,49 +52,63 @@ def _sec(x_samples: int, sr: int = 16000) -> float:
 #
 #     return results
 
-def transcribe_full(model, wav_path, language=None):
+def transcribe_full(model: Any, wav_path: str | Path, language: str | None = None) -> List[Dict[str, Any]]:
     """
-    Un seul passage ASR sur tout l'audio.
-    Retourne une liste de segments ASR: [{'start': float, 'end': float, 'text': str}, ...]
+    Perform a single ASR pass over the entire audio file.
+
+    :param model: Faster-Whisper compatible model instance.
+    :type model: Any
+    :param wav_path: Path to the WAV audio to transcribe.
+    :type wav_path: str | Path
+    :param language: Optional forced language code supplied to the decoder.
+    :type language: str | None
+    :returns: List of segment dictionaries with ``start``, ``end``, and ``text``.
+    :rtype: List[Dict[str, Any]]
     """
     segments, info = model.transcribe(
         wav_path,
-        language=language or "fr",  # force FR si tu sais que c’est du français
+        language=language or "fr",  # force French when language is known
         task="transcribe",
-        # Laisse faster-whisper appliquer sa VAD interne, ça casse souvent les boucles :
+        # Let Faster-Whisper apply its internal VAD to reduce looping.
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=300),
-        # Découpage plus court → moins de drift :
+        # Shorter chunks help reduce drift.
         chunk_length=20,
         word_timestamps=False,
 
-        # Beam search "froid" pour éviter la dérive
+        # Conservative beam search to avoid drift.
         beam_size=5,
-        temperature=0.0,  # pas de sampling
-        # ne PAS conditionner sur le texte précédent (source majeure de répétitions)
+        temperature=0.0,  # disable sampling
+        # Never condition on previous text (major source of repetitions).
         condition_on_previous_text=False,
 
-        # Garde-fous anti-hallucination / répétition
+        # Anti-hallucination / anti-repetition guardrails.
         compression_ratio_threshold=2.4,
         no_speech_threshold=0.6,
         log_prob_threshold=-1.0,
 
-        # (facultatif) prompt plus neutre
+        # Optional neutral prompt.
         initial_prompt=None,
     )
     out = []
     for s in segments:
-        # s.start, s.end, s.text sont fournis par faster-whisper
+        # s.start, s.end, s.text are provided by Faster-Whisper.
         out.append({"start": float(s.start), "end": float(s.end), "text": s.text})
     return out
 
 
-def text_by_diar_window(diar_segments, asr_segments):
+def text_by_diar_window(diar_segments: List[Dict[str, Any]], asr_segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Agrège le texte ASR par fenêtre de diarisation.
-    Pour chaque segment diar, concatène le texte des segments ASR qui chevauchent.
+    Aggregate ASR text by diarization window overlap.
+
+    :param diar_segments: Diarization segments containing ``start``/``end`` boundaries.
+    :type diar_segments: List[Dict[str, Any]]
+    :param asr_segments: ASR segments with timestamps and transcripts.
+    :type asr_segments: List[Dict[str, Any]]
+    :returns: List of diarization segments with aggregated ``text`` fields.
+    :rtype: List[Dict[str, Any]]
     """
-    def overlap(a0, a1, b0, b1):
+    def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
         return max(0.0, min(a1, b1) - max(a0, b0))
 
     results = []
@@ -99,13 +121,29 @@ def text_by_diar_window(diar_segments, asr_segments):
         results.append({**d, "text": " ".join(t for t in buf if t).strip()})
     return results
 
-def transcribe_segments(model, wav_path, diar_segments, language=None):
+
+def transcribe_segments(
+    model: Any,
+    wav_path: str | Path,
+    diar_segments: List[Dict[str, Any]],
+    language: str | None = None,
+) -> List[Dict[str, Any]]:
     """
-    Transcrit en s'appuyant sur les defaults stables de faster-whisper.
-    Fenêtre audio par [start,end] pour réduire la charge côté encode().
+    Use Faster-Whisper defaults to transcribe diarised segments.
+
+    :param model: Faster-Whisper compatible model instance.
+    :type model: Any
+    :param wav_path: Path to the audio file to transcribe.
+    :type wav_path: str | Path
+    :param diar_segments: Diarization results providing time windows.
+    :type diar_segments: List[Dict[str, Any]]
+    :param language: Optional forced language code supplied to the decoder.
+    :type language: str | None
+    :returns: ASR segment list describing decoded windows.
+    :rtype: List[Dict[str, Any]]
     """
     asr_segments = transcribe_full(model, wav_path, language=language)
-    # diar_text = text_by_diar_window(diar_segments, asr_segments)  # Ne pas mettre ! Ca fout le bazar
+    # diar_text = text_by_diar_window(diar_segments, asr_segments)  # Keep disabled; it breaks alignment.
     return asr_segments
 
 # def attach_speakers(
@@ -113,8 +151,8 @@ def transcribe_segments(model, wav_path, diar_segments, language=None):
 #     asr_segments: List[Dict[str, Any]],
 # ) -> List[Dict[str, Any]]:
 #     """
-#     Associe les labels speaker (issus de ta diarisation) aux segments ASR.
-#     Politique simple : affecter chaque segment ASR au speaker du segment de diar le plus chevauchant.
+#     Assign diarization speaker labels to ASR segments.
+#     Policy: attach each ASR segment to the diarization window with the largest overlap.
 #     """
 #     def overlap(a: Tuple[int,int], b: Tuple[int,int]) -> int:
 #         return max(0, min(a[1], b[1]) - max(a[0], b[0]))
@@ -135,22 +173,35 @@ def transcribe_segments(model, wav_path, diar_segments, language=None):
 def attach_speakers(
     diar_segments: List[Dict[str, Any]],
     asr_segments: List[Dict[str, Any]],
-    eps: float = 0.05,        # 50 ms de tolérance sur les bords
-    gap_tol: float = 0.30     # 300 ms de tolérance pour prendre le plus proche
+    eps: float = 0.05,        # 50 ms tolerance on segment boundaries
+    gap_tol: float = 0.30     # 300 ms tolerance when choosing the nearest diar segment
 ) -> List[Dict[str, Any]]:
     """
-    Associe un speaker à chaque segment ASR en étant tolérant aux minuscules désalignements.
-    - Si un seul speaker est présent dans la diarisation, on l'applique à tous les segments ASR.
-    - Sinon : on cherche d'abord un diar qui 'contient' le milieu du segment ASR (±eps),
-      puis on prend celui qui maximise le chevauchement (avec marges eps),
-      sinon on prend le diar le plus proche si l'écart est < gap_tol.
+    Assign a speaker label to each ASR segment while tolerating minor misalignments.
+
+    If diarization returns a single speaker, the label is propagated across every
+    ASR segment. Otherwise, the function searches for the diarization segment that
+    contains the ASR midpoint (with a ± ``eps`` margin), falls back to the maximum
+    overlap, and finally picks the nearest diarization segment when the gap is below
+    ``gap_tol``.
+
+    :param diar_segments: Diarization segments with ``start``/``end`` and speaker labels.
+    :type diar_segments: List[Dict[str, Any]]
+    :param asr_segments: ASR segments to be labelled with speakers.
+    :type asr_segments: List[Dict[str, Any]]
+    :param eps: Margin applied when checking whether the midpoint is contained.
+    :type eps: float
+    :param gap_tol: Maximum allowed distance when falling back to nearest diarization segment.
+    :type gap_tol: float
+    :returns: ASR segments enriched with a ``speaker`` key.
+    :rtype: List[Dict[str, Any]]
     """
 
     if not diar_segments:
-        # Pas de diar : tout sur speaker 0
+        # No diarization results: assign speaker 0 everywhere.
         return [{**a, "speaker": 0} for a in asr_segments]
 
-    # Normalise types et trie
+    # Normalise types and sort by start time.
     diar = []
     for d in diar_segments:
         ds = float(d["start"])
@@ -161,7 +212,7 @@ def attach_speakers(
         diar.append({"start": ds, "end": de, "speaker": spk})
     diar.sort(key=lambda x: x["start"])
 
-    # Cas trivial : un seul speaker détecté -> on l’assigne partout
+    # Trivial case: a single detected speaker across all segments.
     speakers = {d["speaker"] for d in diar}
     if len(speakers) == 1:
         spk0 = int(next(iter(speakers)))
@@ -179,15 +230,15 @@ def attach_speakers(
             a0, a1 = a1, a0
         amid = 0.5 * (a0 + a1)
 
-        # 1) Diar "contenant" le milieu (avec tolérance eps)
+        # 1) Diar segment that contains the midpoint (with ± eps tolerance).
         containing = [d for d in diar if (d["start"] - eps) <= amid <= (d["end"] + eps)]
         if containing:
-            # S'il y en a plusieurs, on prend celui qui a le plus grand chevauchement
+            # If several segments qualify, keep the one with maximum overlap.
             pick = max(containing, key=lambda d: overlap((a0, a1), (d["start"] - eps, d["end"] + eps)))
             labeled.append({**a, "speaker": int(pick["speaker"])})
             continue
 
-        # 2) Pas de contenant : prend max overlap (avec marges eps)
+        # 2) No containing segment: pick the maximum overlap (with margins).
         best = None
         best_ov = -1.0
         for d in diar:
@@ -199,21 +250,21 @@ def attach_speakers(
             labeled.append({**a, "speaker": int(best["speaker"])})
             continue
 
-        # 3) Fallback : le plus proche si l'écart est raisonnable (gap_tol)
+        # 3) Fallback: pick the closest segment if the gap is reasonable.
         def dist_to_segment(x0: float, x1: float, y0: float, y1: float) -> float:
-            # distance minimale entre [x0,x1] et [y0,y1]
+            # Minimum distance between [x0, x1] and [y0, y1].
             if x1 < y0:
                 return y0 - x1
             if y1 < x0:
                 return x0 - y1
-            return 0.0  # ils se chevauchent (ou se touchent)
+            return 0.0  # segments overlap or touch.
 
         nearest = min(diar, key=lambda d: dist_to_segment(a0, a1, d["start"], d["end"]))
         dmin = dist_to_segment(a0, a1, nearest["start"], nearest["end"])
         if dmin <= gap_tol:
             labeled.append({**a, "speaker": int(nearest["speaker"])})
         else:
-            # Ultime fallback : le speaker majoritaire autour (prend le premier)
+            # Ultimate fallback: reuse the most common nearby speaker (first entry).
             labeled.append({**a, "speaker": int(diar[0]["speaker"])})
 
     return labeled

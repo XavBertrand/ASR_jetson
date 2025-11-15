@@ -7,10 +7,10 @@ name = "asr-jetson"
 version = "0.1.0"
 description = "Lightweight ASR Pipeline with Diarization for Jetson Orin Nano"
 readme = "README.md"
-requires-python = ">=3.10,<3.12"
+requires-python = ">=3.11,<3.12"
 license = {text = "MIT"}
 authors = [{ name = "Xavier Bertrand", email = "xavier.bertrand@example.com" }]
-keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper", "nemo"]
+keywords = ["asr", "speech-recognition", "diarization", "jetson", "whisper"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -21,51 +21,48 @@ classifiers = [
 ]
 
 dependencies = [
-  "numpy<2.0",
-  "scikit-learn",
-  "tqdm",
+  # >>> NumPy redevient 2.x pour pyannote et Torch
+  "numpy>=2.3.3,<3.0",
   "pydub",
   "soundfile",
-  "librosa==0.10.2.post1",
-  "ffmpeg-python",
   "faster-whisper",
-  "onnx>=1.14",
-  "jiwer<4",
-  "marshmallow",
-  "pyloudnorm",
-  "resampy",
-  "wrapt",
-  "braceexpand",
-  "editdistance",
-  "wget",
-  "tensorboard",
   "pydantic>=2.0.0",
-  "pydantic-settings>=2.0.0",
   "pyyaml",
-  "huggingface_hub>=0.23.0,<0.24.0",
-  "transformers==4.41.2",
+  "huggingface_hub>=0.25,<1.0",
+  "transformers>=4.44,<5",
   "ctranslate2>=4.4.0",
-  # --- PyTorch auto multi-arch (sans extras) ---
-  # Windows x86_64 CUDA 12.4
-  "torch==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Windows' and platform_machine == 'AMD64'",
-  # Linux x86_64 (WSL2 inclus) CUDA 12.4
-  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
-  # Jetson Linux aarch64 (cuDNN/CUDA fournis par JetPack ; pas de suffixe +cu124)
+  # --- PyTorch multi-arch / CUDA 12.6 etc. ---
+  # Windows x86_64 CUDA 12.6
+  "torch==2.8.0+cu126; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Windows' and platform_machine == 'AMD64'",
+  # Linux x86_64 CUDA 12.6
+  "torch==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  # Jetson Linux aarch64
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
-  "speechbrain>=1.0.3",
-  "pyarrow>=12,<17",
-  "datasets>=2.14,<3.0",
-  "nemo-toolkit[asr]>=1.23.0",
-  "pyannote-audio",
   "python-docx>=1.2.0",
   "pytest>=8.4.2",
   "flashtext>=2.7",
   "rapidfuzz>=3.14.1",
   "unidecode>=1.4.0",
+  # diarisation / VAD / embeddings (pyannote)
+  "pyannote-audio>=4.0.1",
+  "librosa==0.10.2.post1",
+  "audioread>=3.0.1",
+  "scipy>=1.16.2",
+  "scikit-learn>=1.7.2",
+  "numba>=0.62.1",
+  "torchcodec==0.6.0",
+  "tiktoken>=0.12.0",
+  "sentencepiece>=0.2.1",
+  "tokenizers>=0.20,<0.21",
+  "mistralai>=1.9.11",
+  "docx-python>=0.1.0",
+  "pypandoc-binary>=1.15",
+  "sacremoses>=0.1.1",
+  "pypandoc>=1.15",
 ]
 
 [project.optional-dependencies]
@@ -84,38 +81,24 @@ api = [
   "uvicorn[standard]>=0.24.0",
   "python-multipart>=0.0.6",
 ]
-# Installe TensorRT/PyCUDA seulement sur Jetson (Linux aarch64)
 tensorrt = [
   "tensorrt; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "pycuda; platform_system == 'Linux' and platform_machine == 'aarch64'",
 ]
-# PyAV : version compatible multi-plateformes
 media = [
   "av>=13,<15",
 ]
-
-# PyTorch pour Windows avec CUDA 12.4
 gpu-win = [
-  "torch==2.4.0+cu124; platform_system == 'Windows'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Windows'",
+  "torch==2.8.0+cu126; platform_system == 'Windows'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Windows'",
 ]
-
-# PyTorch pour Linux x86_64 (WSL2, Desktop Linux) avec CUDA 12.4
 gpu-linux = [
-  "torch==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
-  "torchaudio==2.4.0+cu124; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torch==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
+  "torchaudio==2.8.0+cu126; platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
-
-# PyTorch pour Jetson ARM64 (depuis PyTorch officiel ou NVIDIA)
-# Sur Jetson, PyTorch est généralement pré-installé ou installé via pip standard
 gpu-jetson = [
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
-]
-
-# NeMo ASR (Linux uniquement : desktop Linux, WSL2, Jetson)
-nemo = [
-  "nemo_toolkit[asr]>=1.21.0,<2.0; platform_system == 'Linux'",
 ]
 
 [project.urls]
@@ -162,7 +145,7 @@ filterwarnings = [
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311"]
+target-version = ["py311", "py312"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -178,7 +161,7 @@ extend-exclude = '''
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 select = ["E", "W", "F", "I", "B", "C4", "UP"]
 ignore = ["E501", "B008", "C901"]
 exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
@@ -187,7 +170,7 @@ exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist"]
 "__init__.py" = ["F401"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -214,11 +197,19 @@ exclude_lines = [
 ]
 
 [tool.uv]
-extra-index-url = ["https://download.pytorch.org/whl/cu124"]
-override-dependencies = [
-  "huggingface-hub>=0.23.0,<0.24.0",
+index-strategy = "unsafe-best-match"
+environments = [
+  "python_version >= '3.11' and platform_system == 'Linux' and platform_machine == 'x86_64'",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchaudio = { index = "pytorch-cu126" }
 
 [tool.uv.extra-build-dependencies]
 youtokentome = ["Cython"]
-

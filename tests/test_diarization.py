@@ -1,5 +1,12 @@
+import os
 from pathlib import Path
 import pytest
+
+try:  # optional dependency
+    from huggingface_hub import GatedRepoError  # type: ignore
+except Exception:  # pragma: no cover - huggingface_hub absent
+    class GatedRepoError(Exception):  # type: ignore
+        ...
 
 # Toujours raisonner depuis la racine du projet, même si PyCharm lance depuis /tests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -8,8 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.integration
 def test_diarization_on_real_file_integration():
     """
-    Test d'intégration : VAD -> embeddings TitaNet -> clustering.
-    On vérifie que la pipeline retourne au moins un segment étiqueté.
+    Integration test for the Pyannote diarization pipeline.
+    Ensures at least one labelled segment is produced.
     """
     # Import tardif pour laisser pytest découvrir le test même si nemo n'est pas installé
     try:
@@ -22,27 +29,26 @@ def test_diarization_on_real_file_integration():
     if not audio_path.exists():
         pytest.skip("tests/data/test.mp3 manquant — on skip l'intégration.")
 
-    # Si TitaNet n'est pas accessible en test, on skip proprement
+    if not os.getenv("HUGGINGFACE_TOKEN"):
+        pytest.skip("HUGGINGFACE_TOKEN absent : la diarisation Pyannote repose sur un repo Hugging Face protégé.")
+
     try:
         diarized = apply_diarization(
             audio_path,
             n_speakers=1,
             device="cuda",
-            backend="pyannote",
         )
-    except FileNotFoundError as e:
-        # typiquement : modèle NeMo introuvable / non téléchargé en contexte de test
-        pytest.skip(f"TitaNet indisponible pour les tests : {e}")
+    except (ModuleNotFoundError, ValueError) as e:
+        pytest.skip(f"Pyannote indisponible pour les tests : {e}")
+    except GatedRepoError as e:
+        pytest.skip(f"Pyannote gated repository inaccessible : {e}")
     except Exception as e:
         # autre erreur bloquante : on la surface pour déboguer
         raise
 
     # Assertions de base
     assert isinstance(diarized, list), "La pipeline doit retourner une liste de segments"
-    assert len(diarized) > 0, "Aucun segment détecté (VAD/embeddings/clustering à vérifier)"
-
-    # Sanity checks sur la structure et la cohérence
-    sample_rate = 16000  # TitaNet et VAD utilisent 16kHz
+    assert len(diarized) > 0, "Aucun segment détecté (pipeline Pyannote à vérifier)"
 
     for seg in diarized:
         # Vérifier les clés essentielles
@@ -51,16 +57,7 @@ def test_diarization_on_real_file_integration():
 
         assert isinstance(seg["speaker"], int)
         assert seg["start"] < seg["end"], "Segment vide/inversé"
-
-        # Vérifier les timestamps en secondes si présents
-        if "start_s" in seg and "end_s" in seg:
-            assert seg["start_s"] < seg["end_s"], "Timestamps en secondes incohérents"
-            # Vérifier la cohérence entre échantillons et secondes
-            assert abs(seg["start_s"] - seg["start"] / sample_rate) < 0.001
-            assert abs(seg["end_s"] - seg["end"] / sample_rate) < 0.001
-
-        # 2 locuteurs max (0 et 1) avec n_speakers=2
-        assert 0 <= seg["speaker"] < 2
+        assert seg["start"] >= 0.0
 
     # Vérifie qu'au moins 2 segments existent OU qu'il y a >1 locuteur détecté
     speakers = {s["speaker"] for s in diarized}

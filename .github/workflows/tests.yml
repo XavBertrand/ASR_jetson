@@ -60,7 +60,6 @@ jobs:
       # 💡 Adapte les "extras" aux tiens. Ici on suppose que:
       # - "dev" contient pytest et les outils de test
       # - "media" contient torchaudio / audio IO
-      # - "nemo" apporte la diarization (TitaNet-S) si tu l'utilises dans les tests
       # On reste CPU-only sur le runner CI.
       - name: Resolve & install dependencies with uv (CPU)
         env:
@@ -68,7 +67,7 @@ jobs:
           PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: |
           # Si tu utilises uv.lock, garde --frozen. Sinon retire-le.
-          uv sync --extra dev --extra media --extra nemo
+          uv sync --extra dev --extra media
 
       - name: Print environment
         run: |
@@ -76,18 +75,11 @@ jobs:
           python -V
           pip list
 
-      # ✅ On exécute précisément les tests que tu as listés
+      # ✅ On exécute l'ensemble des tests présents dans le dossier tests
       - name: Run unit tests (pytest)
         run: |
           . .venv/bin/activate
-          pytest \
-            tests/test_rnnoise.py \
-            tests/test_vad.py \
-            tests/test_diarization.py \
-            tests/test_clustering.py \
-            tests/test_asr_whisper.py \
-            tests/test_txt_file_format.py \
-            tests/test_full_pipeline.py \
+          pytest tests \
             -q --maxfail=1 --disable-warnings \
             --junitxml=reports/junit.xml \
             --durations=20
