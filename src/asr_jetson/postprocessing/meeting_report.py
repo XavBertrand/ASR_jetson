@@ -27,11 +27,13 @@ _PANDOC_MD_FORMAT = "markdown+pipe_tables+grid_tables+multiline_tables+table_cap
 _PREFERRED_SANS_FONTS: Tuple[str, ...] = ("Arial", "Calibri", "Liberation Sans", "DejaVu Sans")
 _ROLE_KEYWORD_HINTS = {
     "delphine": "Delphine (avocat gérante)",
+    "marie": "Delphine (avocat gérante)",
     "marine": "Collaborateur",
     "sylvie": "Collaborateur",
 }
 _PERSON_CANONICAL_ALIASES = {
     "delphine": "Delphine",
+    "marie": "Delphine",
     "marine": "Marine",
     "sylvie": "Sylvie",
     "marine.": "Marine",
@@ -263,8 +265,7 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
         if not normalized_tag:
             continue
         canonical_clean = (canonical or "").strip()
-        canonical_alias = _PERSON_CANONICAL_ALIASES.get(canonical_clean.lower(), canonical_clean)
-        canonical_key = canonical_alias.lower() if canonical_alias else normalized_tag
+        canonical_key = canonical_clean.lower() if canonical_clean else normalized_tag
         primary_tag = canonical_to_tag.setdefault(canonical_key, normalized_tag)
         if primary_tag != normalized_tag:
             replacements[normalized_tag] = primary_tag
@@ -276,6 +277,7 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
             text = text.replace(src_tag, dst_tag)
 
     new_reverse_map: Dict[str, str] = {}
+    normalized_alias_lookup: Dict[str, str] = {}
     for raw_tag, canonical in reverse_map.items():
         if not isinstance(raw_tag, str):
             continue
@@ -284,9 +286,15 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
             continue
         normalized_tag = replacements.get(normalized_tag, normalized_tag)
         canonical_clean = (canonical or "").strip()
-        canonical_alias = _PERSON_CANONICAL_ALIASES.get(canonical_clean.lower(), canonical_clean)
-        if canonical_alias and normalized_tag not in new_reverse_map:
-            new_reverse_map[normalized_tag] = canonical_alias
+        if canonical_clean and normalized_tag not in new_reverse_map:
+            new_reverse_map[normalized_tag] = canonical_clean
+        alias_display = _PERSON_CANONICAL_ALIASES.get(canonical_clean.lower())
+        if (
+            alias_display
+            and alias_display.strip()
+            and alias_display.strip().lower() != canonical_clean.lower()
+        ):
+            normalized_alias_lookup[normalized_tag] = alias_display.strip()
 
     new_entities: Dict[str, Any] = {}
     for raw_tag, info in entities.items():
@@ -296,9 +304,9 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
         normalized_tag = replacements.get(normalized_tag, normalized_tag)
         existing = new_entities.get(normalized_tag)
         info_copy = dict(info)
-        reverse_alias = new_reverse_map.get(normalized_tag)
-        if reverse_alias and isinstance(info_copy.get("values"), list):
-            values = [reverse_alias] + [val for val in info_copy["values"] if val != reverse_alias]
+        reverse_value = new_reverse_map.get(normalized_tag)
+        if reverse_value and isinstance(info_copy.get("values"), list):
+            values = [reverse_value] + [val for val in info_copy["values"] if val != reverse_value]
             info_copy["values"] = list(dict.fromkeys(values))
         if existing:
             merged_values = list(
@@ -313,6 +321,8 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
 
     mapping["reverse_map"] = new_reverse_map
     mapping["entities"] = new_entities
+    if normalized_alias_lookup:
+        mapping["alias_lookup"] = normalized_alias_lookup
     return text, mapping
 
 
@@ -617,18 +627,31 @@ def _rewrite_roles(
         return deanonymized_text
 
     lookup = _build_tag_lookup(mapping)
+    alias_source = mapping.get("alias_lookup", {})
+    alias_lookup: Dict[str, str] = {}
+    if isinstance(alias_source, dict):
+        for tag, alias in alias_source.items():
+            if not isinstance(tag, str) or not isinstance(alias, str):
+                continue
+            normalized_tag = _normalize_tag_key(tag)
+            if not normalized_tag:
+                continue
+            alias_lookup[normalized_tag] = alias.strip()
     text = deanonymized_text
 
     for tag, role in roles.items():
+        normalized_tag = _normalize_tag_key(tag)
         canonical = lookup.get(tag)
         if not canonical:
             continue
 
         normalized_role = role.lower()
+        preferred_display = alias_lookup.get(normalized_tag, canonical)
         if "delphine" in normalized_role:
-            detailed_label = (
-                f'Delphine (avocat gérante; transcription : "{canonical}")'
-            )
+            alias_note = ""
+            if canonical and preferred_display and preferred_display.lower() != canonical.lower():
+                alias_note = f'; transcription : "{canonical}"'
+            detailed_label = f'{preferred_display or "Delphine"} (avocat gérante{alias_note})'
             text, replaced = _replace_first_occurrence(text, canonical, detailed_label)
             if replaced:
                 canonical_pattern = re.compile(rf"\b{re.escape(canonical)}\b", flags=re.IGNORECASE)
@@ -640,12 +663,14 @@ def _rewrite_roles(
                         return match.group(0)
                     if before == "(":
                         return match.group(0)
-                    return "Delphine"
+                    return preferred_display or "Delphine"
 
                 text = canonical_pattern.sub(_delphine_repl, text)
             else:
-                if "Delphine" not in text:
-                    text += f'\n\nDelphine (avocat gérante; transcription : "{canonical}")'
+                fallback_display = preferred_display or "Delphine"
+                if fallback_display not in text:
+                    note = f'; transcription : "{canonical}"' if canonical and (fallback_display.lower() != canonical.lower()) else ""
+                    text += f'\n\n{fallback_display} (avocat gérante{note})'
             continue
 
         suffix = f" ({role})"
