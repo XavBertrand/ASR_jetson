@@ -1,6 +1,13 @@
 import json
+import os
 from pathlib import Path
 import pytest
+
+try:  # optional dependency (HF client)
+    from huggingface_hub import GatedRepoError  # type: ignore
+except Exception:  # pragma: no cover - huggingface_hub absent
+    class GatedRepoError(Exception):  # type: ignore
+        ...
 
 # Racine du projet même si le test est lancé depuis /tests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,10 +45,14 @@ def test_full_pipeline_end_to_end(tmp_path):
     )
 
     # Run
+    if not os.getenv("HUGGINGFACE_TOKEN"):
+        pytest.skip("HUGGINGFACE_TOKEN absent : la pipeline complète repose sur les modèles Pyannote.")
     try:
         result = run_pipeline(str(audio_path), cfg)
     except (ModuleNotFoundError, ValueError) as e:
         pytest.skip(f"Pyannote indisponible pour l'intégration : {e}")
+    except GatedRepoError as e:
+        pytest.skip(f"Pyannote gated repository inaccessible : {e}")
     except Exception:
         # On laisse les autres exceptions remonter pour debug
         raise
