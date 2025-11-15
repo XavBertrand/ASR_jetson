@@ -1,5 +1,12 @@
+import os
 from pathlib import Path
 import pytest
+
+try:  # optional dependency
+    from huggingface_hub import GatedRepoError  # type: ignore
+except Exception:  # pragma: no cover - huggingface_hub absent
+    class GatedRepoError(Exception):  # type: ignore
+        ...
 
 # Toujours raisonner depuis la racine du projet, même si PyCharm lance depuis /tests
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +29,9 @@ def test_diarization_on_real_file_integration():
     if not audio_path.exists():
         pytest.skip("tests/data/test.mp3 manquant — on skip l'intégration.")
 
+    if not os.getenv("HUGGINGFACE_TOKEN"):
+        pytest.skip("HUGGINGFACE_TOKEN absent : la diarisation Pyannote repose sur un repo Hugging Face protégé.")
+
     try:
         diarized = apply_diarization(
             audio_path,
@@ -30,6 +40,8 @@ def test_diarization_on_real_file_integration():
         )
     except (ModuleNotFoundError, ValueError) as e:
         pytest.skip(f"Pyannote indisponible pour les tests : {e}")
+    except GatedRepoError as e:
+        pytest.skip(f"Pyannote gated repository inaccessible : {e}")
     except Exception as e:
         # autre erreur bloquante : on la surface pour déboguer
         raise
