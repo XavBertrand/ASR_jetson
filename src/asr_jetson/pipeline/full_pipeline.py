@@ -319,6 +319,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "report_docx": None,
         "report_markdown": None,
         "report_pdf": None,
+        "report_status": "disabled",
+        "report_reason": "Meeting report generation disabled in configuration.",
     }
 
     base_text = out_txt.read_text(encoding="utf-8")

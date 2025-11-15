@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import asr_jetson.postprocessing.mistral_client as mistral_client
 from asr_jetson.postprocessing.anonymizer import deanonymize_text
+import requests  # type: ignore
 
 try:  # pragma: no cover - optional dependency
     import pypandoc  # type: ignore
@@ -26,17 +27,54 @@ _PANDOC_MD_FORMAT = "markdown+pipe_tables+grid_tables+multiline_tables+table_cap
 _PREFERRED_SANS_FONTS: Tuple[str, ...] = ("Arial", "Calibri", "Liberation Sans", "DejaVu Sans")
 _ROLE_KEYWORD_HINTS = {
     "delphine": "Delphine (avocat gérante)",
-    "marie": "Delphine (avocat gérante)",
     "marine": "Collaborateur",
     "sylvie": "Collaborateur",
 }
 _PERSON_CANONICAL_ALIASES = {
-    "marie": "Delphine",
     "delphine": "Delphine",
     "marine": "Marine",
     "sylvie": "Sylvie",
     "marine.": "Marine",
 }
+_DEFAULT_MISTRAL_HEALTHCHECK_URL = "https://api.mistral.ai/v1/models"
+
+
+def _check_mistral_access(timeout: float = 5.0) -> Tuple[bool, str]:
+    """
+    Vérifie que l'API Mistral est accessible avec la configuration courante.
+    Retourne (True, "") si OK, sinon (False, raison).
+    """
+    api_key = (os.getenv("MISTRAL_API_KEY") or "").strip()
+    if not api_key:
+        return False, "MISTRAL_API_KEY absent de l'environnement."
+    if mistral_client.Mistral is None:
+        return False, "Le package 'mistralai' est requis pour contacter l'API Mistral."
+
+    healthcheck_url = os.getenv("MISTRAL_HEALTHCHECK_URL", _DEFAULT_MISTRAL_HEALTHCHECK_URL)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
+    try:
+        response = requests.get(healthcheck_url, headers=headers, timeout=timeout)
+    except Exception as exc:  # pragma: no cover - dépend du réseau
+        return False, f"API Mistral inaccessible ({exc})"
+
+    if response.status_code >= 400:
+        return False, f"API Mistral non disponible (status={response.status_code})"
+    return True, ""
+
+
+def _empty_report_outputs(reason: str, status: str = "skipped") -> Dict[str, Optional[str]]:
+    return {
+        "report_anonymized_txt": None,
+        "report_txt": None,
+        "report_markdown": None,
+        "report_docx": None,
+        "report_pdf": None,
+        "report_status": status,
+        "report_reason": reason,
+    }
 
 def _normalize_llm_placeholders(text: str) -> str:
     """
@@ -150,6 +188,34 @@ def _count_person_tags(text: str) -> Dict[str, int]:
             continue
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+def _canonical_entities_by_label(mapping: Dict[str, Any]) -> Dict[str, List[str]]:
+    grouped: Dict[str, List[str]] = {}
+    entities = mapping.get("entities")
+    if not isinstance(entities, list):
+        return grouped
+    for entity in entities:
+        canonical = (entity.get("canonical") or "").strip()
+        if not canonical:
+            continue
+        label = (entity.get("type") or entity.get("label") or "ENTITÉ").strip()
+        if not label:
+            label = "ENTITÉ"
+        normalized_label = label.upper()
+        grouped.setdefault(normalized_label, [])
+        grouped[normalized_label].append(canonical)
+    for label, names in grouped.items():
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for name in names:
+            lowered = name.casefold()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            deduped.append(name)
+        grouped[label] = deduped
+    return grouped
 
 
 def _select_relevant_person_tags(
@@ -516,6 +582,32 @@ def _prune_participants_table(
     return "\n".join(new_lines)
 
 
+def _append_missing_entities_section(text: str, mapping: Dict[str, Any]) -> str:
+    grouped = _canonical_entities_by_label(mapping)
+    if not grouped:
+        return text
+
+    normalized_text = text.casefold()
+    missing: Dict[str, List[str]] = {}
+    for label, names in grouped.items():
+        for name in names:
+            lowered = name.casefold()
+            if lowered and lowered not in normalized_text:
+                missing.setdefault(label, []).append(name)
+    if not missing:
+        return text
+
+    section_lines: List[str] = ["", "### Référentiel des entités désanonymisées", ""]
+    for label in sorted(missing.keys()):
+        section_lines.append(f"**{label.title()}**")
+        for name in missing[label]:
+            section_lines.append(f"- {name}")
+        section_lines.append("")
+
+    base_text = text.rstrip() + "\n\n"
+    return base_text + "\n".join(section_lines).rstrip() + "\n"
+
+
 def _rewrite_roles(
     deanonymized_text: str,
     mapping: Dict[str, Any],
@@ -701,6 +793,12 @@ def generate_meeting_report(
     3) Désanonymise le rapport LLM via mapping
     4) Exporte TXT/Markdown et génère DOCX+PDF via pypandoc
     """
+    ok, failure_reason = _check_mistral_access()
+    if not ok:
+        message = failure_reason or "API Mistral indisponible"
+        print(f"⚠️ Meeting report skipped: {message}")
+        return _empty_report_outputs(message)
+
     out_dir = out_dir or anonymized_txt_path.parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -741,6 +839,8 @@ def generate_meeting_report(
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # convertit les puces unicode en puces Markdown standard
     analysis_deanonymized = re.sub(r"^[ \t]*[•∙]", "- ", analysis_deanonymized, flags=re.MULTILINE)
+    # garantit que toutes les entités canoniques apparaissent au moins une fois
+    analysis_deanonymized = _append_missing_entities_section(analysis_deanonymized, mapping)
 
     # 4) Sauvegardes
     base = (run_id or Path(anonymized_txt_path).stem.replace("_anon_clean", ""))
@@ -777,4 +877,6 @@ def generate_meeting_report(
         "report_markdown": str(out_md),
         "report_docx": str(out_docx),
         "report_pdf": str(out_pdf),
+        "report_status": "generated",
+        "report_reason": "",
     }

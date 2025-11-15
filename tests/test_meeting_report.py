@@ -156,6 +156,7 @@ def test_generate_meeting_report_end_to_end_no_network(
 
     # Patch ce que meeting_report.py utilise réellement :
     monkeypatch.setattr(meeting_report_mod.mistral_client, "chat_complete", fake_chat_complete)
+    monkeypatch.setattr(meeting_report_mod, "_check_mistral_access", lambda timeout=5.0: (True, ""))
 
     # === 2) Mock désanonymisation : deanonymize_text ===
     # On remplace la fonction par une version simple qui applique le mapping fourni.
@@ -194,6 +195,8 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "report_docx" in result
     assert "report_pdf" in result
     assert "report_markdown" in result
+    assert result["report_status"] == "generated"
+    assert result["report_reason"] == ""
 
     p_anon = Path(result["report_anonymized_txt"])
     p_txt = Path(result["report_txt"])
@@ -240,3 +243,38 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "UDAF" in full_doc_text
     # Et au moins un titre de section transformé en heading
     assert any("RÉSUMÉ EXÉCUTIF" in p.text for p in doc.paragraphs)
+
+
+def test_generate_meeting_report_skipped_when_mistral_unavailable(
+    temp_project, monkeypatch
+):
+    """
+    Vérifie que la génération est proprement court-circuitée si l'API Mistral est inaccessible.
+    """
+
+    monkeypatch.setattr(meeting_report_mod, "_check_mistral_access", lambda timeout=5.0: (False, "API indisponible"))
+
+    root = temp_project["root"]
+    anon_txt = temp_project["anon_txt"]
+    mapping_json = temp_project["mapping_json"]
+    prompts_json = temp_project["prompts_json"]
+
+    result = generate_meeting_report(
+        anonymized_txt_path=anon_txt,
+        mapping_json_path=mapping_json,
+        prompts_json_path=prompts_json,
+        prompt_key="meeting_analysis",
+        out_dir=root / "outputs" / "txt",
+        run_id="testfile",
+    )
+
+    assert result["report_status"] == "skipped"
+    assert "indisponible" in result["report_reason"]
+    for key in [
+        "report_anonymized_txt",
+        "report_txt",
+        "report_markdown",
+        "report_docx",
+        "report_pdf",
+    ]:
+        assert result[key] is None
