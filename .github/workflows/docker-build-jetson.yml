@@ -128,10 +128,10 @@ jobs:
           images: xbmtb82/asr_jetson
           tags: |
             type=ref,event=branch
-            type=sha,format=short,prefix={{branch}}-,enable={{is_branch}}
-            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable={{is_branch}}
+            type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
+            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
             type=semver,pattern={{version}},event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
       - name: Compute build vars
         id: vars
         shell: bash
