@@ -97,13 +97,14 @@ uv run asr-pipeline \
   --denoise \
   --speakers 2 \
   --whisper-model h2oai/faster-whisper-large-v3-turbo \
-  --pyannote-pipeline pyannote/speaker-diarization-community-1 \
+  --pyannote-pipeline pyannote/speaker-diarization-3.1 \
   --pyannote-token "$HUGGINGFACE_TOKEN"
 ```
 
 * Switch `--device cpu` when CUDA is unavailable.
 * Meeting reports require anonymization (enabled by default) and `MISTRAL_API_KEY`.
 * For debugging, run `uv run python -m asr_jetson.pipeline.cli ...`.
+* Jetson builds default to `pyannote/speaker-diarization-3.1` (Pyannote Audio 3.x) because `torchcodec` wheels are unavailable on aarch64; desktop x86_64 users can switch to `pyannote/speaker-diarization-community-1` (Pyannote 4.x) for the latest pipeline.
 
 ### Example Output
 
