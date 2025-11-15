@@ -117,11 +117,15 @@ uv run asr-pipeline \
   "txt_anon_llm": "outputs/txt/sample_pyannote_..._turbo_anon_clean.txt",
   "anon_mapping": "outputs/json/sample_pyannote_..._turbo_anon_mapping.json",
   "report_docx": "outputs/reports/sample_meeting_report.docx",
-  "report_markdown": "outputs/reports/sample_meeting_report.md"
+  "report_markdown": "outputs/reports/sample_meeting_report.md",
+  "report_pdf": "outputs/pdf/sample_meeting_report.pdf",
+  "report_status": "generated",
+  "report_reason": ""
 }
 ```
 
-Running the pipeline writes diarized segments, transcripts, anonymized variants, and report artifacts under `outputs/`.
+Running the pipeline writes diarized segments, transcripts, anonymized variants, and report artifacts under `outputs/`.  
+If the Mistral prerequisites are missing, `report_status` becomes `skipped` and `report_reason` explains why (e.g., missing API key or unavailable endpoint).
 
 ---
 
