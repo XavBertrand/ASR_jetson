@@ -252,6 +252,62 @@ SPEAKER_2 : Oui, mais il vaut mieux que vous, dans ce cas-là, il vaut mieux qu'
 
     print(f"Entités du domaine retrouvées après désanonymisation: {entities_found}")
 
+    # 🧪 Cas supplémentaire : stabilité sur les homophones/homographes
+    homophone_context = (
+        "SPEAKER_3 : Marine confirme la réunion même si tout le monde est fatigué.\n"
+        "SPEAKER_3 : marine relance le client malgré la faute de casse.\n"
+        "SPEAKER_4 : On parle ensuite de la vie marine fragile près du port.\n"
+    )
+
+    def _nth_index(text: str, substring: str, occurrence: int = 1) -> int:
+        idx = -1
+        for _ in range(occurrence):
+            idx = text.index(substring, idx + 1)
+        return idx
+
+    marine_upper_start = _nth_index(homophone_context, "Marine")
+    marine_lower_start = _nth_index(homophone_context, "marine")
+    marine_sea_start = _nth_index(homophone_context, "marine", occurrence=2)
+
+    homophone_entities = [
+        {
+            "start": marine_upper_start,
+            "end": marine_upper_start + len("Marine"),
+            "entity_type": "PERSON",
+            "score": 0.98,
+            "source": "test",
+        },
+        {
+            "start": marine_lower_start,
+            "end": marine_lower_start + len("marine"),
+            "entity_type": "PERSON",
+            "score": 0.9,
+            "source": "test",
+        },
+        {
+            "start": marine_sea_start,
+            "end": marine_sea_start + len("marine"),
+            "entity_type": "MISC",
+            "score": 0.6,
+            "source": "test",
+        },
+    ]
+
+    anon_homophones, homophone_mapping = anonymizer.anonymize_with_tags(
+        homophone_context, entities=homophone_entities
+    )
+
+    marine_entities = [
+        info for info in homophone_mapping["entities"].values() if info["label"] == "PERSON"
+    ]
+    assert len(marine_entities) == 1, f"Les variantes de Marine devraient fusionner: {marine_entities}"
+    assert marine_entities[0]["canonical"] == "Marine"
+    assert {"Marine", "marine"} <= set(marine_entities[0]["variants"])
+    assert "<PERSON_" in anon_homophones and anon_homophones.count("<PERSON_") == 2
+    assert anon_homophones.lower().count("marine") == 1, "Il devrait rester uniquement la référence à la mer"
+    assert "vie marine fragile" in anon_homophones, "Le contexte maritime ne doit pas être anonymisé"
+    assert homophone_mapping["stats"]["total"] == 2, "Seules les mentions personnes doivent être comptées"
+
     print(f"✅ Détecté {len(mapping['entities'])} entités uniques")
     print(f"📊 Stats: {mapping['stats']}")
     print("✅ Test texte long OK")

@@ -246,6 +246,10 @@ class TransformerAnonymizer:
                 pattern = re.compile(r'\b' + re.escape(entity_value) + r'\b', re.IGNORECASE)
 
                 for match in pattern.finditer(text):
+                    surface = text[match.start():match.end()]
+                    if self._looks_like_common_noun_usage(surface, text, match.start(), match.end()):
+                        continue
+
                     entities.append({
                         "start": match.start(),
                         "end": match.end(),
@@ -365,6 +369,7 @@ class TransformerAnonymizer:
                 continue
             if self._should_skip_surface(surface, etype_norm):
                 continue
+            common_usage = self._looks_like_common_noun_usage(surface, text, start, end)
 
             ent_copy = ent.copy()
             tokens_lower = {tok.lower() for tok in re.split(r"[\s,\.;:!\?\-\(\)]+", surface) if tok}
@@ -375,7 +380,7 @@ class TransformerAnonymizer:
             if tokens_lower & self.generic_blocklist:
                 continue
             domain_label = self._domain_lookup.get(surface.lower())
-            if domain_label:
+            if domain_label and not common_usage:
                 ent_copy["entity_type"] = domain_label
                 etype_norm = domain_label
             else:
@@ -384,6 +389,8 @@ class TransformerAnonymizer:
                 etype_norm = refined_label
 
             ent_copy["_surface_lower"] = surface_lower
+            ent_copy["_surface_is_lower"] = surface.islower()
+            ent_copy["_looks_common"] = common_usage
             candidates.append(ent_copy)
 
         label_priority = {"PERSON": 4, "ORGANIZATION": 4, "LOCATION": 3, "MISC": 1}
@@ -402,7 +409,22 @@ class TransformerAnonymizer:
         filtered: List[Dict[str, Any]] = []
         for ent_copy in candidates:
             surface_key = ent_copy.pop("_surface_lower")
-            ent_copy["entity_type"] = best_labels.get(surface_key, ent_copy["entity_type"])
+            surface_is_lower = ent_copy.pop("_surface_is_lower", False)
+            looks_common = ent_copy.pop("_looks_common", False)
+            original_label = ent_copy["entity_type"]
+            resolved_label = best_labels.get(surface_key, original_label)
+
+            if (
+                resolved_label == "PERSON"
+                and original_label != "PERSON"
+                and surface_is_lower
+                and looks_common
+            ):
+                # Conserve la mention générique (ex: "marine" en tant que mer)
+                # lorsque seule la casse différencie les usages.
+                continue
+
+            ent_copy["entity_type"] = resolved_label
             filtered.append(ent_copy)
 
         # Trie par position
@@ -636,6 +658,51 @@ class TransformerAnonymizer:
         curr_quality = self._surface_quality_score(current)
         cand_quality = self._surface_quality_score(candidate)
         return candidate if cand_quality > curr_quality else current
+
+    @staticmethod
+    def _tokenize_window(window: str) -> List[str]:
+        return re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ']+", window)
+
+    def _looks_like_common_noun_usage(self, surface: str, text: str, start: int, end: int) -> bool:
+        """
+        Détecte les contextes typiques d'un nom commun (ex: 'la vie marine').
+        Utilisé pour éviter de transformer des homophones en PERSON.
+        """
+        clean = surface.strip()
+        if not clean or not clean.islower():
+            return False
+
+        window_before = text[max(0, start - 30):start]
+        window_after = text[end:min(len(text), end + 30)]
+        before_tokens = self._tokenize_window(window_before)
+        after_tokens = self._tokenize_window(window_after)
+
+        prev_token = unidecode(before_tokens[-1]).lower() if before_tokens else ""
+        prev_prev = unidecode(before_tokens[-2]).lower() if len(before_tokens) >= 2 else ""
+        next_token = unidecode(after_tokens[0]).lower() if after_tokens else ""
+
+        determiners = {"la", "le", "les", "une", "un", "des", "du", "de", "d", "l", "au", "aux"}
+        noun_contexts = {
+            "vie", "faune", "flore", "ressource", "ressources", "biodiversite", "biodiversité",
+            "milieu", "milieux", "industrie", "industries", "ministere", "ministeres",
+            "arme", "armee", "marine", "justice", "police"
+        }
+        following_contexts = {
+            "fragile", "fragiles", "durable", "durables", "maritime", "maritimes",
+            "marchande", "marchandes", "nationale", "nationales", "militaire", "militaires",
+            "protegee", "protegees", "protégée", "protégées", "sensible", "sensibles"
+        }
+
+        if prev_token in determiners:
+            return True
+        if prev_token in noun_contexts or prev_prev in noun_contexts:
+            return True
+        if prev_token in {"de", "d"} and prev_prev in determiners:
+            return True
+        if next_token in following_contexts:
+            return True
+
+        return False
 
     @staticmethod
     def _surface_quality_score(surface: str) -> Tuple[int, int, int, int]:
