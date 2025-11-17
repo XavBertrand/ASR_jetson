@@ -39,6 +39,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       tini \
+      software-properties-common \
+      gnupg \
+    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
+    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /tmp/* /var/tmp/* /root/.cache \
@@ -60,8 +64,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 
 ENV PATH="/root/.local/bin:$PATH"
 
-# Création du venv
-RUN uv venv /opt/venv
+# Installation d'un runtime Python 3.11 (compatible avec la contrainte du projet)
+RUN uv python install 3.11
+
+# Création du venv sur la base de Python 3.11
+RUN uv venv --python 3.11 /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" \
     VIRTUAL_ENV="/opt/venv"
 
@@ -71,8 +78,10 @@ COPY ./src ./src
 
 # Installation avec nettoyage immédiat et agressif
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache -e ".[media,tensorrt,nemo]" language-tool-python && \
+    uv pip install --no-cache -e ".[media,tensorrt]" language-tool-python && \
     rm -rf /tmp/* /var/tmp/*
+
+# Torch/CUDA (JetPack) already provided by base image; Pyannote 3.x installed via project deps.
 
 # Nettoyage ultra-agressif du venv
 RUN find /opt/venv -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
@@ -93,7 +102,7 @@ RUN find /opt/venv -type f -executable -name "*-config" -delete && \
     find /opt/venv/include -type f -delete 2>/dev/null || true
 
 # Vérification rapide
-RUN python3 -c "import torch, nemo, transformers" > /dev/null 2>&1
+RUN python3 -c "import torch, transformers" > /dev/null 2>&1
 
 # -----------------------------------------------------------------------------
 # STAGE: runtime (image finale ultra-légère)

@@ -1,8 +1,15 @@
 # tests/test_asr_integration.py
+import os
 from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+try:  # optional dependency
+    from huggingface_hub import GatedRepoError  # type: ignore
+except Exception:  # pragma: no cover - huggingface_hub absent
+    class GatedRepoError(Exception):  # type: ignore
+        ...
 
 
 @pytest.mark.integration
@@ -19,11 +26,16 @@ def test_asr_on_real_file_and_attach_speakers():
     if not audio.exists():
         pytest.skip("tests/data/test.mp3 manquant")
 
+    if not os.getenv("HUGGINGFACE_TOKEN"):
+        pytest.skip("HUGGINGFACE_TOKEN absent : Pyannote nécessite un accès Hugging Face.")
+
     # 1) diarisation -> segments + speakers
     try:
-        diar = apply_diarization(audio, n_speakers=1, device="cuda", clustering_method="spectral")
-    except FileNotFoundError as e:
-        pytest.skip(f"TitaNet indisponible : {e}")
+        diar = apply_diarization(audio, n_speakers=1, device="cuda")
+    except (ModuleNotFoundError, ValueError) as e:
+        pytest.skip(f"Pyannote indisponible : {e}")
+    except GatedRepoError as exc:
+        pytest.skip(f"Pyannote gated repository non accessible : {exc}")
 
     assert isinstance(diar, list) and len(diar) > 0
 

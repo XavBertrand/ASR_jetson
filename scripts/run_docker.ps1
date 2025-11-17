@@ -1,1 +1,0 @@
-docker run -it --rm -v C:\Users\bertr\PycharmProjects\ASR_Agent:/workspace -w /workspace xavier/asr-agent:dev python scripts/run_asr_pipeline.py tests/data/test.mp3 --out outputs --lang fr --ns 1 --denoise

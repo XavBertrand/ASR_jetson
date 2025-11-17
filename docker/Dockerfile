@@ -1,5 +1,5 @@
-# Image NVIDIA officielle avec CUDA 12.4 + PyTorch
-FROM nvcr.io/nvidia/pytorch:24.05-py3
+# Image NVIDIA officielle avec CUDA 12.6 + PyTorch
+FROM nvcr.io/nvidia/pytorch:24.09-py3
 
 # Métadonnées de l'image
 LABEL org.opencontainers.image.source="https://github.com/XavBertrand/ASR_jetson"
@@ -10,14 +10,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Installer les dépendances système + nvidia-utils pour nvidia-smi
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libsndfile1 \
+    software-properties-common \
+    gnupg \
     git \
     wget \
     curl \
-    gnupg \
-    software-properties-common \
+    libsndfile1 \
     nvidia-utils-535 \
+    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
+    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -29,15 +30,24 @@ ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV PYTHONPATH=/workspace
 
-# Copier requirements en premier (pour le cache Docker)
-COPY docker/requirements.txt ./requirements.txt
+# Préparer les métadonnées du projet pour profiter du cache Docker
+COPY pyproject.toml README.md ./
+COPY src ./src
 
-# Installer les dépendances Python de base
-RUN pip install --no-cache-dir -r requirements.txt
+# Utiliser l'index PyTorch CUDA 12.6 pour l'installation des dépendances
+ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
-# Installer torchaudio et torchvision avec CUDA 12.4
-RUN pip install --no-cache-dir torchaudio --index-url https://download.pytorch.org/whl/cu124
-RUN pip install --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu124
+# Installer les dépendances Python de base depuis le projet
+RUN pip install --no-cache-dir -e ".[media,tensorrt]"
+
+# Mettre à jour PyTorch et bibliothèques associées vers CUDA 12.6 (torch 2.8.0 GPU)
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu126 \
+    torch==2.8.0+cu126 \
+    torchvision==0.19.0+cu126 \
+    torchaudio==2.8.0+cu126
+
+# Pyannote > 4.0.1 pour compatibilité la plus récente
+RUN pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"
 
 # Installer TensorRT et dépendances
 RUN pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt
@@ -48,9 +58,6 @@ RUN pip install --no-cache-dir faster-whisper[tensorrt]
 # Installer CTranslate2 avec support TensorRT
 RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
     ctranslate2[tensorrt]
-
-# Installer Nemo (compatible torch 2.4 de NVIDIA)
-RUN pip install --no-cache-dir nemo_toolkit[asr]==2.0.0
 
 # Copier le code
 COPY . .

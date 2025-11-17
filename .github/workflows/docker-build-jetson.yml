@@ -127,21 +127,12 @@ jobs:
         with:
           images: xbmtb82/asr_jetson
           tags: |
-            # tags générés pour les branches uniquement
             type=ref,event=branch
-            type=sha,format=short,prefix={{branch}}-,enable={{is_branch}}
-            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable={{is_branch}}
-
-#            tags générés pour les releases (push sur tag)
+            type=ref,event=pr,prefix=pr-
+            type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
+            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
             type=semver,pattern={{version}},event=tag
-
-            # latest sur la branche par défaut uniquement
-            type=raw,value=latest,enable={{is_default_branch}}
-#            type=raw,value=latest,enable={{is_default_branch}}
-#            type=sha,format=short
-#            type=raw,value=${{ github.event.inputs.docker_tag }},enable=${{ github.event.inputs.docker_tag != '' }}
-
-
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
       - name: Compute build vars
         id: vars
         shell: bash

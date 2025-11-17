@@ -1,5 +1,5 @@
 """
-Configuration centralisée avec Pydantic pour le pipeline ASR
+Centralized Pydantic configuration models for the ASR pipeline.
 """
 from pathlib import Path
 from typing import Literal, Optional, List
@@ -8,13 +8,13 @@ import yaml
 
 
 class DenoiseConfig(BaseModel):
-    """Configuration RNNoise"""
+    """RNNoise denoising configuration."""
     enabled: bool = True
     model_path: Path = Field(default=Path("models/rnnoise/rnnoise.rnnn"))
 
 
 class VADConfig(BaseModel):
-    """Configuration Silero VAD"""
+    """Silero VAD configuration."""
     model_name: str = "silero_vad"
     threshold: float = Field(0.5, ge=0.0, le=1.0)
     min_speech_duration_ms: int = Field(250, ge=100)
@@ -24,17 +24,15 @@ class VADConfig(BaseModel):
 
 
 class DiarizationConfig(BaseModel):
-    """Configuration diarisation"""
+    """Speaker diarization configuration."""
     enabled: bool = True
-    model_name: str = "titanet_small"
+    pipeline: str = "pyannote/speaker-diarization-3.1"
+    auth_token: Optional[str] = None
     n_speakers: Optional[int] = Field(None, ge=1, le=20)
-    clustering_method: Literal["spectral", "agglomerative", "kmeans"] = "spectral"
-    min_cluster_size: int = Field(2, ge=1)
-    embedding_batch_size: int = Field(32, ge=1)
 
 
 class ASRConfig(BaseModel):
-    """Configuration ASR"""
+    """Automatic speech recognition engine configuration."""
     engine: Literal["faster-whisper", "fastconformer"] = "faster-whisper"
     model_size: Literal["tiny", "base", "small", "medium", "large"] = "small"
     device: Literal["cpu", "cuda", "auto"] = "auto"
@@ -76,7 +74,7 @@ class LoggingConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    """Configuration globale du pipeline"""
+    """Aggregate configuration for the full ASR pipeline."""
     name: str = "asr_pipeline"
     version: str = "0.1.0"
 
@@ -90,48 +88,70 @@ class PipelineConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: Path) -> "PipelineConfig":
-        """Charge depuis YAML"""
+        """
+        Load a pipeline configuration from a YAML file.
+
+        :param path: Path to the YAML configuration file.
+        :type path: Path
+        :returns: Instantiated pipeline configuration.
+        :rtype: PipelineConfig
+        """
         with open(path, 'r') as f:
             data = yaml.safe_load(f)
         return cls(**data)
 
     def to_yaml(self, path: Path) -> None:
-        """Sauvegarde en YAML"""
+        """
+        Serialize the pipeline configuration to a YAML file.
+
+        :param path: Destination path for the YAML output.
+        :type path: Path
+        """
         with open(path, 'w') as f:
             yaml.dump(self.model_dump(), f, default_flow_style=False)
 
     @classmethod
     def for_jetson(cls) -> "PipelineConfig":
-        """Config optimisée Jetson"""
+        """
+        Build a configuration tuned for NVIDIA Jetson targets.
+
+        :returns: Jetson-optimized pipeline configuration.
+        :rtype: PipelineConfig
+        """
         return cls(
             asr=ASRConfig(model_size="small", device="cuda", compute_type="int8"),
             performance=PerformanceConfig(batch_size=1, num_workers=2),
-            diarization=DiarizationConfig(embedding_batch_size=16),
+            diarization=DiarizationConfig(),
         )
 
     @classmethod
     def for_desktop(cls) -> "PipelineConfig":
-        """Config optimisée desktop"""
+        """
+        Build a configuration tuned for desktop GPUs.
+
+        :returns: Desktop-optimized pipeline configuration.
+        :rtype: PipelineConfig
+        """
         return cls(
             asr=ASRConfig(model_size="medium", device="cuda", compute_type="float16"),
             performance=PerformanceConfig(batch_size=8, num_workers=8),
-            diarization=DiarizationConfig(embedding_batch_size=64),
+            diarization=DiarizationConfig(),
         )
 
 
-# Créer les configs par défaut
+# Create the default configuration files when executed directly.
 if __name__ == "__main__":
-    # Créer config dir
+    # Create the configuration directory.
     config_dir = Path("config")
     config_dir.mkdir(exist_ok=True)
 
-    # Config par défaut
+    # Default configuration.
     PipelineConfig().to_yaml(config_dir / "default.yaml")
 
-    # Config Jetson
+    # Jetson configuration.
     PipelineConfig.for_jetson().to_yaml(config_dir / "jetson.yaml")
 
-    # Config Desktop
+    # Desktop configuration.
     PipelineConfig.for_desktop().to_yaml(config_dir / "desktop.yaml")
 
     print("✓ Configuration files created in config/")
