@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
+
+from rapidfuzz import fuzz
+from unidecode import unidecode
 from transformers import pipeline
 try:
     import torch  # type: ignore
@@ -90,10 +94,25 @@ class TransformerAnonymizer:
         self.domain_entities = domain_entities or {}
         self._domain_lookup = self._build_domain_lookup(self.domain_entities)
         self._domain_values = {value.lower() for values in self.domain_entities.values() for value in values}
+        self._domain_canonical = {
+            value.lower(): value for values in self.domain_entities.values() for value in values
+        }
 
         # Seuils
         self.min_score = 0.5
         self.min_length = 2
+        # Stopwords et mots génériques à ignorer pour éviter les faux positifs.
+        self.person_blocklist = {
+            "elle", "elles", "il", "ils", "on", "je", "tu", "nous", "vous", "toi", "moi",
+            "lui", "leur", "leurs", "quelqu'un", "personne", "personnes", "chacun", "aucun",
+            "quand", "pourquoi", "comment", "merci", "bonjour", "soir", "matin", "midi",
+            "relance", "relances", "relancer", "moral", "morale", "cooptation", "rupture", "serfa",
+            "serfas", "cerfa", "cerfas"
+        }
+        self.generic_blocklist = self.person_blocklist | {
+            "sms", "whatsapp", "mail", "mails", "email", "emails", "tennis", "lundi", "mardi",
+            "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
+        }
 
     def analyze(self, text: str) -> List[Dict[str, Any]]:
         """
@@ -321,7 +340,7 @@ class TransformerAnonymizer:
             start = ent["start"]
             end = ent["end"]
             surface_raw = text[start:end]
-            surface = surface_raw.strip()
+            surface = self._clean_surface(surface_raw)
 
             if not surface:
                 continue
@@ -337,7 +356,8 @@ class TransformerAnonymizer:
 
             if len(surface) < self.min_length:
                 continue
-            if surface.lower() in self.whitelist:
+            surface_lower = surface.lower()
+            if surface_lower in self.whitelist:
                 continue
             if surface.upper().startswith("SPEAKER"):
                 continue
@@ -347,7 +367,13 @@ class TransformerAnonymizer:
                 continue
 
             ent_copy = ent.copy()
-
+            tokens_lower = {tok.lower() for tok in re.split(r"[\s,\.;:!\?\-\(\)]+", surface) if tok}
+            if etype_norm == "PERSON" and (
+                surface_lower in self.person_blocklist or tokens_lower & self.person_blocklist
+            ):
+                continue
+            if tokens_lower & self.generic_blocklist:
+                continue
             domain_label = self._domain_lookup.get(surface.lower())
             if domain_label:
                 ent_copy["entity_type"] = domain_label
@@ -357,7 +383,7 @@ class TransformerAnonymizer:
                 ent_copy["entity_type"] = refined_label
                 etype_norm = refined_label
 
-            ent_copy["_surface_lower"] = surface.lower()
+            ent_copy["_surface_lower"] = surface_lower
             candidates.append(ent_copy)
 
         label_priority = {"PERSON": 4, "ORGANIZATION": 4, "LOCATION": 3, "MISC": 1}
@@ -407,71 +433,100 @@ class TransformerAnonymizer:
 
         if entities is None:
             entities = self.analyze(text)
+        else:
+            entities = self._deduplicate_entities(entities, text)
 
         entities_sorted = sorted(entities, key=lambda e: e["start"])
 
-        # Compteurs et mapping
-        seen: Dict[Tuple[str, str], str] = {}
         counters = {"PERSON": 1, "ORGANIZATION": 1, "LOCATION": 1, "MISC": 1}
-
         mapping: Dict[str, Any] = {
             "entities": {},
             "reverse_map": {},
-            "stats": {"total": 0, "by_type": {}}
+            "stats": {"total": 0, "by_type": {}},
         }
-
-        spans: List[Tuple[int, int, str, str]] = []
+        spans: List[Tuple[int, int, str]] = []
+        grouped_tags: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
         for ent in entities_sorted:
             start = ent["start"]
             end = ent["end"]
-            etype = ent["entity_type"]
+            etype = self._normalize_type(ent["entity_type"])
             raw_surface = text[start:end]
 
-            # Préserve les espaces autour en ne remplaçant que la partie utile
             leading_ws = len(raw_surface) - len(raw_surface.lstrip())
             trailing_ws = len(raw_surface) - len(raw_surface.rstrip())
-
             trimmed_start = start + leading_ws
             trimmed_end = end - trailing_ws
-
             if trimmed_start >= trimmed_end:
                 continue
 
             surface = text[trimmed_start:trimmed_end]
+            normalized_display = self._prepare_surface_for_mapping(surface, etype)
+            norm_compact, norm_spaced = self._normalize_surface_key(normalized_display)
+            if not norm_compact and not norm_spaced:
+                continue
 
-            # Normalise le type
-            etype_norm = self._normalize_type(etype)
-
-            # Crée ou récupère le tag
-            key = (etype_norm, surface.lower())
-            if key in seen:
-                tag = seen[key]
+            existing = self._find_existing_group(grouped_tags[etype], norm_compact, norm_spaced)
+            if existing:
+                tag = existing["tag"]
+                info = mapping["entities"][tag]
+                best_value = self._pick_better_surface(
+                    info.get("canonical", info["values"][0]),
+                    normalized_display,
+                    etype,
+                    current_score=info.get("score", 1.0),
+                    candidate_score=float(ent.get("score", 1.0)),
+                )
+                if best_value != info.get("canonical"):
+                    info["canonical"] = best_value
+                    mapping["reverse_map"][tag] = best_value
+                    existing["canonical"] = best_value
+                    compact_new, spaced_new = self._normalize_surface_key(best_value)
+                    existing["normalized_compact"] = compact_new
+                    existing["normalized_spaced"] = spaced_new
+                if normalized_display not in info["values"]:
+                    info["values"].append(normalized_display)
+                variants = info.setdefault("variants", [])
+                if surface not in variants:
+                    variants.append(surface)
+                new_score = float(ent.get("score", 1.0))
+                if new_score > info.get("score", 0.0):
+                    info["score"] = new_score
+                    info["source"] = ent.get("source", info.get("source", "ml"))
             else:
-                if etype_norm not in counters:
-                    counters[etype_norm] = 1
-
-                tag = f"<{etype_norm}_{counters[etype_norm]}>"
-                counters[etype_norm] += 1
-                seen[key] = tag
-
+                if etype not in counters:
+                    counters[etype] = 1
+                tag = f"<{etype}_{counters[etype]}>"
+                counters[etype] += 1
+                canonical_value = normalized_display
                 mapping["entities"][tag] = {
-                    "label": etype_norm,
-                    "values": [surface],
+                    "label": etype,
+                    "values": [canonical_value],
+                    "variants": [surface],
                     "source": ent.get("source", "ml"),
-                    "score": float(ent.get("score", 1.0))
+                    "score": float(ent.get("score", 1.0)),
+                    "canonical": canonical_value,
                 }
-                mapping["reverse_map"][tag] = surface
+                mapping["reverse_map"][tag] = canonical_value
+                grouped_tags[etype].append(
+                    {
+                        "tag": tag,
+                        "normalized_compact": norm_compact,
+                        "normalized_spaced": norm_spaced,
+                        "canonical": canonical_value,
+                    }
+                )
 
-            spans.append((trimmed_start, trimmed_end, tag, surface))
+            spans.append((trimmed_start, trimmed_end, tag))
             mapping["stats"]["total"] += 1
 
-        # Remplace de la fin vers le début SANS manger les espaces
-        spans.sort(key=lambda x: x[0], reverse=True)
-        anonymized = text
+        replacements_corrected = [
+            (start, end, mapping["reverse_map"][tag]) for start, end, tag in spans
+        ]
+        mapping["corrected_text"] = self._apply_replacements(text, replacements_corrected)
 
-        for start, end, tag, surface in spans:
-            anonymized = anonymized[:start] + tag + anonymized[end:]
+        replacements_tags = [(start, end, tag) for start, end, tag in spans]
+        anonymized = self._apply_replacements(text, replacements_tags)
 
         # Harmonise les labels de locuteurs au format "SPEAKER_X :" pour matcher les standards tests
         anonymized = re.sub(r"(SPEAKER_\d+)\s*:(\s*)", r"\1 :\2", anonymized)
@@ -490,6 +545,158 @@ class TransformerAnonymizer:
         for tag, original_value in mapping.get("reverse_map", {}).items():
             result = result.replace(tag, original_value)
 
+        return result
+
+    def _clean_surface(self, surface: str) -> str:
+        """Supprime les guillemets et espaces superflus autour d'un span."""
+        clean = surface.strip()
+        clean = re.sub(r"^[\"'“”‘’\(\)\[\]]+", "", clean)
+        clean = re.sub(r"[\"'“”‘’\)\(\[\]]+$", "", clean)
+        clean = re.sub(r"\s+", " ", clean)
+        return clean.strip()
+
+    def _prepare_surface_for_mapping(self, surface: str, label: str) -> str:
+        """Normalise le rendu (casse, accents) pour homogénéiser le mapping."""
+        clean = self._clean_surface(surface)
+        if not clean:
+            return ""
+
+        domain_value = self._domain_canonical.get(clean.lower())
+        if domain_value:
+            return domain_value
+
+        if label == "PERSON":
+            tokens = [tok for tok in re.split(r"\s+", clean) if tok]
+            normalized_tokens = []
+            for tok in tokens:
+                ascii_token = unidecode(tok)
+                if ascii_token.isupper() and len(ascii_token) <= 4:
+                    normalized_tokens.append(ascii_token)
+                elif len(ascii_token) > 1:
+                    normalized_tokens.append(ascii_token[0].upper() + ascii_token[1:].lower())
+                else:
+                    normalized_tokens.append(ascii_token.upper())
+            return " ".join(normalized_tokens)
+
+        if label in {"ORGANIZATION", "LOCATION"} and clean.islower():
+            return clean.title()
+
+        return clean
+
+    def _find_existing_group(
+        self,
+        groups: List[Dict[str, Any]],
+        norm_compact: str,
+        norm_spaced: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Retourne le groupe existant dont la clé normalisée est proche."""
+        for group in groups:
+            if self._surfaces_close(
+                group.get("normalized_compact", ""),
+                norm_compact,
+                group.get("normalized_spaced", ""),
+                norm_spaced,
+            ):
+                return group
+        return None
+
+    def _pick_better_surface(
+        self,
+        current: str,
+        candidate: str,
+        label: str,
+        *,
+        current_score: float = 1.0,
+        candidate_score: float = 1.0,
+    ) -> str:
+        """Choisit la meilleure variante à conserver comme canonique."""
+        candidate = self._prepare_surface_for_mapping(candidate, label)
+        if not current:
+            return candidate
+        if not candidate:
+            return current
+        if candidate.lower() in self._domain_canonical:
+            return self._domain_canonical[candidate.lower()]
+        if current.lower() in self._domain_canonical:
+            return current
+
+        curr_compact, _ = self._normalize_surface_key(current)
+        cand_compact, _ = self._normalize_surface_key(candidate)
+        if label == "PERSON":
+            if curr_compact.endswith("s") and curr_compact.rstrip("s") == cand_compact:
+                return candidate
+            if cand_compact.endswith("s") and cand_compact.rstrip("s") == curr_compact:
+                return current
+
+        if candidate_score > current_score + 0.05:
+            return candidate
+        if current_score > candidate_score + 0.05:
+            return current
+
+        curr_quality = self._surface_quality_score(current)
+        cand_quality = self._surface_quality_score(candidate)
+        return candidate if cand_quality > curr_quality else current
+
+    @staticmethod
+    def _surface_quality_score(surface: str) -> Tuple[int, int, int, int]:
+        """Heuristique simple pour prioriser les variantes (casse, longueur)."""
+        clean = surface.strip()
+        tokens = [tok for tok in re.split(r"\s+", clean) if tok]
+        proper_tokens = sum(1 for tok in tokens if tok and tok[0].isupper())
+        has_upper = int(any(ch.isupper() for ch in clean))
+        has_lower = int(any(ch.islower() for ch in clean))
+        return (
+            proper_tokens,
+            len(tokens),
+            has_upper - (0 if has_lower else 1),
+            len(clean),
+        )
+
+    @staticmethod
+    def _normalize_surface_key(surface: str) -> Tuple[str, str]:
+        base = unidecode(surface.lower())
+        compact = re.sub(r"[^a-z0-9]", "", base)
+        spaced = re.sub(r"[^a-z0-9]+", " ", base).strip()
+        return compact, spaced
+
+    @staticmethod
+    def _surfaces_close(
+        norm_a_compact: str,
+        norm_b_compact: str,
+        norm_a_spaced: str,
+        norm_b_spaced: str,
+    ) -> bool:
+        if not norm_a_compact or not norm_b_compact:
+            return False
+        if norm_a_compact == norm_b_compact:
+            return True
+
+        ratios = [
+            fuzz.ratio(norm_a_compact, norm_b_compact),
+            fuzz.partial_ratio(norm_a_compact, norm_b_compact),
+        ]
+        spaced_scores = [
+            fuzz.token_set_ratio(norm_a_spaced, norm_b_spaced) if norm_a_spaced and norm_b_spaced else 0,
+            fuzz.token_sort_ratio(norm_a_spaced, norm_b_spaced) if norm_a_spaced and norm_b_spaced else 0,
+        ]
+        if max(ratios + spaced_scores) >= 92:
+            return True
+        if (
+            norm_a_compact[0] == norm_b_compact[0]
+            and abs(len(norm_a_compact) - len(norm_b_compact)) <= 3
+            and max(ratios + spaced_scores) >= 80
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _apply_replacements(text: str, replacements: List[Tuple[int, int, str]]) -> str:
+        """Applique une liste de remplacements sans décaler les index suivants."""
+        if not replacements:
+            return text
+        result = text
+        for start, end, value in sorted(replacements, key=lambda x: x[0], reverse=True):
+            result = result[:start] + value + result[end:]
         return result
 
     @staticmethod
@@ -555,9 +762,8 @@ class TransformerAnonymizer:
                     return "PERSON"
 
         # Degrade PERSON/ORGANIZATION predictions when the surface is entirely lowercase (likely noise)
-        if lowercase == clean:
-            if label in {"PERSON", "ORGANIZATION"}:
-                return "MISC"
+        if lowercase == clean and label == "ORGANIZATION":
+            return "MISC"
 
         # Downgrade ORGANIZATION predictions for very short fragments
         if label == "ORGANIZATION" and len(clean) <= 3 and lowercase == clean:
@@ -572,6 +778,8 @@ class TransformerAnonymizer:
             return True
 
         clean_lower = clean.lower()
+        if clean_lower in self.generic_blocklist:
+            return True
 
         # Ignore duplicates for domain values handled elsewhere
         if clean_lower in self._domain_values:

@@ -79,6 +79,41 @@ def _write_srt(segments: List[Dict[str, Any]], path: Path) -> None:
         ]
     path.write_text("\n".join(lines), encoding="utf-8")
 
+
+class _GpuMemoryMonitor:
+    """Utility that prints CUDA memory usage at key checkpoints."""
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = bool(enabled) and torch.cuda.is_available()
+        if self.enabled:
+            try:
+                torch.cuda.synchronize()
+                torch.cuda.reset_peak_memory_stats()
+            except RuntimeError:
+                self.enabled = False
+
+    @staticmethod
+    def _fmt(num_bytes: int) -> str:
+        mib = num_bytes / (1024 ** 2)
+        return f"{mib:.1f} MiB"
+
+    def log(self, label: str) -> None:
+        if not self.enabled:
+            return
+        try:
+            torch.cuda.synchronize()
+            free, total = torch.cuda.mem_get_info()
+        except RuntimeError:
+            self.enabled = False
+            return
+        used = total - free
+        max_allocated = torch.cuda.max_memory_allocated()
+        max_reserved = torch.cuda.max_memory_reserved()
+        print(
+            f"[GPU MEM] {label}: used {self._fmt(used)} / {self._fmt(total)} "
+            f"(max_allocated {self._fmt(max_allocated)}, max_reserved {self._fmt(max_reserved)})"
+        )
+
 @dataclass
 class PipelineConfig:
     """Configuration container governing an ASR pipeline run."""
@@ -93,6 +128,7 @@ class PipelineConfig:
     whisper_compute: str = "int8"      # int8 / int8_float16 / float16 / float32
     language: Optional[str] = None     # None = auto-detect
     out_dir: Path = Path("outputs")    # where to write JSON/SRT/WAV intermediates
+    monitor_gpu_memory: bool = False
 
     anonymize: bool = True
     anon_model: str = "Jean-Baptiste/camembert-ner"
@@ -171,6 +207,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     :rtype: Dict[str, Any]
     """
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
+    monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
+    monitor.log("pipeline-start")
 
     # Avoid CTranslate2 crashes by harmonising compute_type with the device.
     compute_type = _sanitize_whisper_compute(device, cfg.whisper_compute)
@@ -205,6 +243,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         pyannote_pipeline=cfg.pyannote_pipeline,
         auth_token=cfg.pyannote_auth_token,
     )
+    monitor.log("after-diarization")
     if not diar_segments:
         return {"diarization": [], "asr": [], "labeled": []}
 
@@ -215,14 +254,17 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         device=device,
         compute_type=compute_type,   # trusted compute type
     )
+    monitor.log("after-whisper-load")
     asr_segments = transcribe_segments(
         model, wav_path, diar_segments, language=cfg.language
     )
+    monitor.log("after-transcription")
 
     # Delete the Whisper model from memory.
     del model
     torch.cuda.empty_cache()
     gc.collect()
+    monitor.log("after-whisper-release")
 
     # 3) Merge ASR segments and speaker assignments.
     labeled = attach_speakers(diar_segments, asr_segments)
@@ -324,7 +366,6 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     }
 
     base_text = out_txt.read_text(encoding="utf-8")
-    out_txt_clean.write_text(base_text, encoding="utf-8")
 
     if cfg.anonymize:
         domain_entities: Dict[str, List[str]] = {}
@@ -352,6 +393,12 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         )
         anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
 
+        corrected_text = mapping.get("corrected_text")
+        if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
+            base_text = corrected_text
+            out_txt.write_text(base_text, encoding="utf-8")
+        out_txt_clean.write_text(base_text, encoding="utf-8")
+
         out_txt_anon.write_text(anonymized_text, encoding="utf-8")
 
         if cfg.anon_enable_llm_qc:
@@ -373,6 +420,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         out_txt_anon.write_text(base_text, encoding="utf-8")
         out_txt_anon_clean.write_text(base_text, encoding="utf-8")
         out_mapping_json.write_text("{}", encoding="utf-8")
+        out_txt_clean.write_text(base_text, encoding="utf-8")
 
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts
@@ -389,6 +437,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
 
     torch.cuda.empty_cache()
     gc.collect()
+    monitor.log("pipeline-end")
 
     return {
         "diarization": diar_segments,
