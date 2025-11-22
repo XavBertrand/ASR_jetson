@@ -20,11 +20,9 @@ def test_bug_espaces():
     print(f"Original:   '{text}'")
     print(f"Anonymisé:  '{anon_text}'")
 
-    # Vérifie qu'il n'y a pas de texte collé
-    assert "appelé<" not in anon_text, "Espace manquant avant tag"
-    assert ">du" not in anon_text, "Espace manquant après tag"
-    assert "cabinet<" not in anon_text, "Espace manquant avant tag"
-    assert ">à" not in anon_text, "Espace manquant après tag"
+    # Vérifie qu'il n'y a pas de texte collé ni de double espace
+    assert "  " not in anon_text, "Pas de double espaces après anonymisation"
+    assert "<" not in anon_text, "Les tags ne doivent plus apparaître dans le texte"
 
     # Vérifie désanonymisation
     restored = anonymizer.deanonymize(anon_text, mapping)

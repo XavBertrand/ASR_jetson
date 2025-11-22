@@ -23,16 +23,19 @@ def test_transformer_anonymization_basic():
     # Vérifie que les noms sont anonymisés
     assert "Marine" not in anon_text, "Marine devrait être anonymisé"
     assert "Delphine" not in anon_text, "Delphine devrait être anonymisé"
-    assert "<PERSON_" in anon_text, "Devrait contenir des tags PERSON"
+    assert "<PERSON_" not in anon_text, "Les tags XML ne doivent plus être présents"
 
     # Vérifie la structure du mapping
     assert "entities" in mapping
     assert "reverse_map" in mapping
+    assert "pseudonym_reverse_map" in mapping
     assert len(mapping["entities"]) > 0
+    pseudonyms = list(mapping["pseudonym_reverse_map"].keys())
+    assert pseudonyms, "La table des pseudonymes ne doit pas être vide"
+    assert any(pseudo in anon_text for pseudo in pseudonyms), "Le texte doit contenir les pseudonymes"
 
     # Vérifie que les espaces sont conservés
     assert "  " not in anon_text, "Pas de double espaces"
-    assert " <" in anon_text or "> " in anon_text, "Les espaces autour des tags devraient être conservés"
 
     # Vérifie la désanonymisation exacte
     restored = anonymizer.deanonymize(anon_text, mapping)
@@ -71,6 +74,8 @@ def test_transformer_with_domain_entities():
     assert "Delphine" not in anon_text, "Delphine devrait être anonymisé"
     assert "Action Avocats" not in anon_text, "Action Avocats devrait être anonymisé"
     assert "CJD" not in anon_text, "CJD devrait être anonymisé"
+    assert "<" not in anon_text, "Le texte anonymisé ne doit pas contenir de chevrons de tag"
+    assert mapping.get("pseudonym_map"), "Le mapping doit exposer les pseudonymes"
 
     # Vérifie qu'Action Avocats est bien classé en ORGANIZATION
     found_org = False
@@ -227,11 +232,9 @@ SPEAKER_2 : Oui, mais il vaut mieux que vous, dans ce cas-là, il vaut mieux qu'
 
     # Vérifie qu'au moins quelques entités sont détectées
     assert len(mapping["entities"]) > 0, "Au moins quelques entités devraient être détectées"
-
-    # Vérifie qu'on a des tags d'anonymisation
-    has_person_tag = "<PERSON_" in anon_text
-    has_org_tag = "<ORGANIZATION_" in anon_text
-    assert has_person_tag or has_org_tag, "Devrait contenir au moins un tag d'entité"
+    assert mapping.get("pseudonym_map"), "Les pseudonymes doivent être renseignés"
+    assert "<" not in anon_text, "Le texte anonymisé ne doit pas contenir de tags XML"
+    assert any(pseudo in anon_text for pseudo in mapping["pseudonym_map"].values()), "Le texte doit contenir les pseudonymes"
 
     # Vérifie que le texte est complet (pas tronqué)
     # On vérifie que les derniers mots du texte original sont présents ou anonymisés
@@ -303,8 +306,9 @@ SPEAKER_2 : Oui, mais il vaut mieux que vous, dans ce cas-là, il vaut mieux qu'
     assert len(marine_entities) == 1, f"Les variantes de Marine devraient fusionner: {marine_entities}"
     assert marine_entities[0]["canonical"] == "Marine"
     assert {"Marine", "marine"} <= set(marine_entities[0]["variants"])
-    assert "<PERSON_" in anon_homophones and anon_homophones.count("<PERSON_") == 2
-    assert anon_homophones.lower().count("marine") == 1, "Il devrait rester uniquement la référence à la mer"
+    pseudo = marine_entities[0].get("pseudonym")
+    assert pseudo, "Le pseudonyme doit être présent"
+    assert anon_homophones.count(pseudo) == 2, "Le pseudonyme doit remplacer les deux mentions"
     assert "vie marine fragile" in anon_homophones, "Le contexte maritime ne doit pas être anonymisé"
     assert homophone_mapping["stats"]["total"] == 2, "Seules les mentions personnes doivent être comptées"
 
@@ -340,7 +344,9 @@ def test_transformer_merges_similar_variants():
     assert "Marine" in canonicals
     assert any("Peny" in value or "Penny" in value for value in canonicals)
     assert mapping["corrected_text"].count("Marine") == 2
-    assert "<PERSON_" in anon_text
+    assert mapping["pseudonym_map"]
+    assert "<" not in anon_text
+    assert any(pseudo in anon_text for pseudo in mapping["pseudonym_map"].values())
 
 
 def test_transformer_filters_pronouns_and_generic_words():
@@ -392,6 +398,8 @@ def test_helper_function():
 
     assert "entities" in mapping
     assert "reverse_map" in mapping
+    assert "pseudonym_reverse_map" in mapping
+    assert anon_text != text
 
 
 if __name__ == "__main__":

@@ -649,6 +649,20 @@ def build_mapping(spans: List[Dict], original_text: str, cfg: Settings) -> Dict:
 
 def build_tag_lookup(mapping: Dict, restore: str = "canonical") -> Dict[str, str]:
     lookup: Dict[str, str] = {}
+    pseudo_reverse = mapping.get("pseudonym_reverse_map")
+    if isinstance(pseudo_reverse, dict):
+        for key, value in pseudo_reverse.items():
+            if key and value:
+                lookup[key] = value
+
+    entities_dict = mapping.get("entities")
+    if isinstance(entities_dict, dict):
+        for info in entities_dict.values():
+            pseudonym = info.get("pseudonym")
+            canonical = info.get("canonical") or (info.get("values") or [None])[0]
+            if pseudonym and canonical and pseudonym not in lookup:
+                lookup[pseudonym] = canonical
+
     for entity in mapping.get("entities", []):
         tag = entity.get("tag")
         if not tag:
@@ -661,8 +675,11 @@ def build_tag_lookup(mapping: Dict, restore: str = "canonical") -> Dict[str, str
         else:
             replacement = entity.get("canonical") or (mentions[0] if mentions else tag)
         lookup[tag] = replacement
+
     if not lookup and mapping.get("tag_lookup"):
         lookup.update(mapping["tag_lookup"])
+    if not lookup and mapping.get("reverse_map"):
+        lookup.update({k: v for k, v in mapping.get("reverse_map", {}).items() if v})
     return lookup
 
 

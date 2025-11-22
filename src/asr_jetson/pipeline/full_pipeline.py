@@ -131,7 +131,7 @@ class PipelineConfig:
     monitor_gpu_memory: bool = False
 
     anonymize: bool = True
-    anon_model: str = "Jean-Baptiste/camembert-ner"
+    anon_model: str = "urchade/gliner_multi_pii-v1"
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
     anon_catalog: Optional[Path] = None  # JSON/TXT catalog path
     anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON

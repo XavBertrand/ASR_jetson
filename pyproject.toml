@@ -47,6 +47,7 @@ dependencies = [
   "flashtext>=2.7",
   "rapidfuzz>=3.14.1",
   "unidecode>=1.4.0",
+  "gliner>=0.2.7",
   # diarisation / VAD / embeddings (pyannote)
   "pyannote-audio>=4.0.1; platform_machine != 'aarch64'",
   "pyannote-audio>=3.1.1,<4.0; platform_machine == 'aarch64'",
@@ -64,6 +65,7 @@ dependencies = [
   "pypandoc-binary>=1.15",
   "sacremoses>=0.1.1",
   "pypandoc>=1.15",
+  "gliner>=0.2.22",
 ]
 
 [project.optional-dependencies]
