@@ -131,7 +131,9 @@ def test_transcription_to_docx_meeting_report(tmp_path: Path):
         assert path.stat().st_size > 0, f"{path} ne doit pas être vide"
 
     anon_report_text = report_txt_anon_path.read_text(encoding="utf-8")
-    assert "<" in anon_report_text and ">" in anon_report_text, "Le rapport anonymisé doit contenir des tags"
+    pseudonyms = list(mapping.get("pseudonym_reverse_map", {}).keys())
+    if pseudonyms:
+        assert any(p in anon_report_text for p in pseudonyms), "Le rapport anonymisé doit réutiliser les pseudonymes"
 
     dean_report_text = report_txt_path.read_text(encoding="utf-8")
     expected_names = _collect_canonical_entities(mapping)

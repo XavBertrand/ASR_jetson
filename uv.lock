@@ -104,6 +104,7 @@ dependencies = [
     { name = "docx-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "faster-whisper", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "flashtext", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "gliner", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "huggingface-hub", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "language-tool-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "librosa", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -167,6 +168,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.104.0" },
     { name = "faster-whisper" },
     { name = "flashtext", specifier = ">=2.7" },
+    { name = "gliner", specifier = ">=0.2.22" },
     { name = "huggingface-hub", specifier = ">=0.25,<1.0" },
     { name = "language-tool-python", specifier = ">=2.9.4" },
     { name = "librosa", specifier = "==0.10.2.post1" },
@@ -175,7 +177,8 @@ requires-dist = [
     { name = "numba", specifier = ">=0.62.1" },
     { name = "numpy", specifier = ">=2.3.3,<3.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.4.0" },
-    { name = "pyannote-audio", specifier = ">=4.0.1" },
+    { name = "pyannote-audio", marker = "platform_machine != 'aarch64'", specifier = ">=4.0.1" },
+    { name = "pyannote-audio", marker = "platform_machine == 'aarch64'", specifier = ">=3.1.1,<4.0" },
     { name = "pycuda", marker = "platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'tensorrt'" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydub" },
@@ -211,7 +214,7 @@ requires-dist = [
     { name = "torchaudio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'gpu-linux'", specifier = "==2.8.0+cu126", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchaudio", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", specifier = "==2.8.0+cu126", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torchaudio", marker = "sys_platform == 'win32' and extra == 'gpu-win'", specifier = "==2.8.0+cu126", index = "https://download.pytorch.org/whl/cu126" },
-    { name = "torchcodec", specifier = "==0.6.0" },
+    { name = "torchcodec", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.6.0" },
     { name = "transformers", specifier = ">=4.44,<5" },
     { name = "unidecode", specifier = ">=1.4.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.24.0" },
@@ -589,6 +592,23 @@ http = [
 ]
 
 [[package]]
+name = "gliner"
+version = "0.2.22"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "onnxruntime", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "sentencepiece", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tqdm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "transformers", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/46/352218ca26dd1b485980a3ce81af47da6bb3f78f5bbcc1754fe854636ab5/gliner-0.2.22.tar.gz", hash = "sha256:29202a4ce4f7ee3d7cd0a579dfc977e716e38263a8b41371576af0406b3081db", size = 65782, upload-time = "2025-08-26T14:44:36.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/33/36869c9cb2d059d20b3fcaf5ec61879099d6ca6f14c2ad023a7914ebc188/gliner-0.2.22-py3-none-any.whl", hash = "sha256:9d12298db26d53b95c49d684ec5d768fbd20833501612bb9865c95e6ec4359c1", size = 76299, upload-time = "2025-08-26T14:44:34.877Z" },
+]
+
+[[package]]
 name = "googleapis-common-protos"
 version = "1.71.0"
 source = { registry = "https://pypi.org/simple" }
@@ -611,6 +631,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/25/5d/382753b52006ce0218297ec1b628e048c4e64b155379331f25a7316eb749/greenlet-3.2.4-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:0db5594dce18db94f7d1650d7489909b57afde4c580806b8d9203b6e79cdc079", size = 639707, upload-time = "2025-08-07T13:18:27.146Z" },
     { url = "https://files.pythonhosted.org/packages/1f/8e/abdd3f14d735b2929290a018ecf133c901be4874b858dd1c604b9319f064/greenlet-3.2.4-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2523e5246274f54fdadbce8494458a2ebdcdbc7b802318466ac5606d3cded1f8", size = 587684, upload-time = "2025-08-07T13:18:25.164Z" },
     { url = "https://files.pythonhosted.org/packages/3f/cc/b07000438a29ac5cfb2194bfc128151d52f333cee74dd7dfe3fb733fc16c/greenlet-3.2.4-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:55e9c5affaa6775e2c6b67659f3a71684de4c549b3dd9afca3bc773533d284fa", size = 1142073, upload-time = "2025-08-07T13:18:21.737Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/05/03f2f0bdd0b0ff9a4f7b99333d57b53a7709c27723ec8123056b084e69cd/greenlet-3.2.4-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:03c5136e7be905045160b1b9fdca93dd6727b180feeafda6818e6496434ed8c5", size = 1613329, upload-time = "2025-11-04T12:42:12.928Z" },
 ]
 
 [[package]]
