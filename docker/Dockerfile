@@ -1,12 +1,31 @@
 # Image NVIDIA officielle avec CUDA 12.6 + PyTorch
-FROM nvcr.io/nvidia/pytorch:24.09-py3
+ARG PYTORCH_IMAGE=nvcr.io/nvidia/pytorch:24.09-py3
+FROM ${PYTORCH_IMAGE}
 
-# Métadonnées de l'image
-LABEL org.opencontainers.image.source="https://github.com/XavBertrand/ASR_jetson"
-LABEL org.opencontainers.image.description="ASR Agent with GPU support for speech recognition"
+# --- Build-time metadata (injectés par le workflow) ---
+ARG GIT_BRANCH=unknown
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+ARG APP_VERSION=dev
 
-# Éviter les interactions pendant l'installation
-ENV DEBIAN_FRONTEND=noninteractive
+# Métadonnées de l'image (alignées avec l'image Jetson)
+LABEL org.opencontainers.image.source="https://github.com/XavBertrand/ASR_jetson" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.ref.name="${GIT_BRANCH}" \
+      org.opencontainers.image.description="ASR Agent with GPU support for speech recognition"
+
+# Variables runtime (inspectables dans le container)
+ENV GIT_BRANCH="${GIT_BRANCH}" \
+    GIT_SHA="${VCS_REF}" \
+    APP_VERSION="${APP_VERSION}" \
+    BUILD_DATE="${BUILD_DATE}" \
+    DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Etc/UTC
 
 # Installer les dépendances système + nvidia-utils pour nvidia-smi
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,8 +34,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
     curl \
+    tini \
     libsndfile1 \
     nvidia-utils-535 \
+    openjdk-21-jre-headless \
     && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
     && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
@@ -28,7 +49,13 @@ WORKDIR /workspace
 # Variables d'environnement pour NVIDIA
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV PYTHONPATH=/workspace
+ENV PYTHONPATH=/workspace \
+    JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
+    PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:${PATH}" \
+    TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HOME=/workspace/.cache/huggingface \
+    TORCH_HOME=/workspace/.cache/torch
 
 # Préparer les métadonnées du projet pour profiter du cache Docker
 COPY pyproject.toml README.md ./
@@ -61,6 +88,9 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 # Copier le code
 COPY . .
+
+# Préparer les répertoires de cache alignés avec l'image Jetson
+RUN mkdir -p /workspace/.cache/huggingface /workspace/.cache/torch
 
 # Script de vérification GPU
 RUN echo '#!/bin/bash\n\
