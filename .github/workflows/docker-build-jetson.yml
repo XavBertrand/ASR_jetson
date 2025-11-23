@@ -1,4 +1,4 @@
-name: Build & Push Docker (Jetson arm64)
+name: Build & Push Docker (multi-arch)
 
 on:
   push:
@@ -15,16 +15,19 @@ on:
         default: ''
 
 concurrency:
-  group: build-jetson-${{ github.ref }}
+  group: build-multiarch-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-push-arm64:
+  build-and-push:
     runs-on: ubuntu-latest
 
     permissions:
       contents: read
       packages: read
+
+    env:
+      IMAGE_NAME: xbmtb82/asr_jetson
 
     steps:
       - name: Checkout
@@ -97,10 +100,11 @@ jobs:
           docker builder prune -af
           df -h
 
-      - name: Set up QEMU (arm64)
+      - name: Set up QEMU (multi-arch)
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: |
@@ -125,7 +129,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: xbmtb82/asr_jetson
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr,prefix=pr-
@@ -148,8 +152,8 @@ jobs:
               echo "app_version=${GITHUB_REF_NAME}-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
             fi
 
-
-      - name: Build & Push (arm64) - With disk monitoring
+      - name: Build & Push (arm64 - Jetson)
+        id: build_arm64
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -171,6 +175,48 @@ jobs:
             BUILDKIT_INLINE_CACHE=0
           # Pas de build en parallèle pour économiser l'espace
           builder: ${{ steps.buildx.outputs.name }}
+
+      - name: Build & Push (amd64)
+        id: build_amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+          build-args: |
+            GIT_BRANCH=${{ steps.vars.outputs.branch }}
+            VCS_REF=${{ steps.vars.outputs.vcs_ref }}
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+            APP_VERSION=${{ steps.vars.outputs.app_version }}
+            BUILDKIT_INLINE_CACHE=0
+          builder: ${{ steps.buildx.outputs.name }}
+
+      - name: Publish multi-arch manifest
+        run: |
+          set -euo pipefail
+          ARM64_DIGEST="${{ steps.build_arm64.outputs.digest }}"
+          AMD64_DIGEST="${{ steps.build_amd64.outputs.digest }}"
+          IMAGE="${{ env.IMAGE_NAME }}"
+          echo "Arm64 digest: ${ARM64_DIGEST}"
+          echo "Amd64 digest: ${AMD64_DIGEST}"
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            echo "Pushing manifest for ${tag}"
+            docker buildx imagetools create -t "${tag}" \
+              "${IMAGE}@${AMD64_DIGEST}" \
+              "${IMAGE}@${ARM64_DIGEST}"
+          done
+
+          # Sanity check on the branch tag if present
+          if echo "${{ steps.meta.outputs.tags }}" | grep -q "${IMAGE}:${{ steps.vars.outputs.branch }}"; then
+            docker buildx imagetools inspect "${IMAGE}:${{ steps.vars.outputs.branch }}"
+          fi
 
       - name: Monitor disk usage during build
         if: always()
