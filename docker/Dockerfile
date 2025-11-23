@@ -43,6 +43,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Installation de uv + Python 3.11 pour aligner les dépendances avec Jetson
+ENV PATH="/root/.local/bin:${PATH}"
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && rm -rf /root/.cache
+RUN uv python install 3.11 && uv venv --python 3.11 /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}" \
+    VIRTUAL_ENV="/opt/venv"
+
 # Définir le dossier de travail
 WORKDIR /workspace
 
@@ -65,26 +72,38 @@ COPY src ./src
 ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
 # Installer les dépendances Python de base depuis le projet
-RUN pip install --no-cache-dir -e ".[media,tensorrt]"
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir -e ".[media,tensorrt]" && \
+    rm -rf /root/.cache
 
 # Mettre à jour PyTorch et bibliothèques associées vers CUDA 12.6 (torch 2.8.0 GPU)
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu126 \
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu126 \
     torch==2.8.0+cu126 \
     torchvision==0.19.0+cu126 \
-    torchaudio==2.8.0+cu126
+    torchaudio==2.8.0+cu126 && \
+    rm -rf /root/.cache
 
 # Pyannote > 4.0.1 pour compatibilité la plus récente
-RUN pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1" && \
+    rm -rf /root/.cache
 
 # Installer TensorRT et dépendances
-RUN pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt && \
+    rm -rf /root/.cache
 
 # Installer faster-whisper avec support TensorRT
-RUN pip install --no-cache-dir faster-whisper[tensorrt]
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir faster-whisper[tensorrt] && \
+    rm -rf /root/.cache
 
 # Installer CTranslate2 avec support TensorRT
-RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
-    ctranslate2[tensorrt]
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
+    ctranslate2[tensorrt] && \
+    rm -rf /root/.cache
 
 # Copier le code
 COPY . .
