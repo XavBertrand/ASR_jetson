@@ -75,13 +75,6 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --no-cache-dir -e ".[media,tensorrt]"
 
-# Mettre à jour PyTorch et bibliothèques associées vers CUDA 12.6 (torch 2.8.0 GPU)
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu126 \
-    torch==2.8.0+cu126 \
-    torchvision==0.19.0+cu126 \
-    torchaudio==2.8.0+cu126
-
 # Pyannote > 4.0.1 pour compatibilité la plus récente
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"
@@ -106,17 +99,32 @@ COPY . .
 RUN mkdir -p /workspace/.cache/huggingface /workspace/.cache/torch
 
 # Script de vérification GPU
-RUN echo '#!/bin/bash\n\
-echo "=== Vérification GPU ==="\n\
-echo "nvidia-smi:"\n\
-nvidia-smi || echo "nvidia-smi non disponible"\n\
-echo ""\n\
-echo "PyTorch CUDA:"\n\
-python -c "import torch; print(f\"PyTorch: {torch.__version__}\"); print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"CUDA version: {torch.version.cuda}\"); print(f\"Device count: {torch.cuda.device_count()}\"); print(f\"Device name: {torch.cuda.get_device_name() if torch.cuda.is_available() else \\\"N/A\\\"}\")"\n\
-echo ""\n\
-echo "faster-whisper GPU:"\n\
-python -c "try:\n    from faster_whisper import WhisperModel\n    model = WhisperModel(\\\"tiny\\\", device=\\\"cuda\\\", compute_type=\\\"int8\\\")\n    print(\\\"✅ faster-whisper peut utiliser GPU\\\")\nexcept Exception as e:\n    print(f\\\"❌ Erreur faster-whisper GPU: {e}\\\")\n"\n\
-' > /usr/local/bin/check-gpu && chmod +x /usr/local/bin/check-gpu
+RUN cat > /usr/local/bin/check-gpu <<'EOF' && chmod +x /usr/local/bin/check-gpu
+#!/bin/bash
+echo "=== Vérification GPU ==="
+echo "nvidia-smi:"
+nvidia-smi || echo "nvidia-smi non disponible"
+echo ""
+echo "PyTorch CUDA:"
+python - <<'PYCODE'
+import torch
+print(f"PyTorch: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"CUDA version: {torch.version.cuda}")
+print(f"Device count: {torch.cuda.device_count()}")
+print(f"Device name: {torch.cuda.get_device_name() if torch.cuda.is_available() else 'N/A'}")
+PYCODE
+echo ""
+echo "faster-whisper GPU:"
+python - <<'PYCODE'
+try:
+    from faster_whisper import WhisperModel
+    model = WhisperModel("tiny", device="cuda", compute_type="int8")
+    print("✅ faster-whisper peut utiliser GPU")
+except Exception as e:
+    print(f"❌ Erreur faster-whisper GPU: {e}")
+PYCODE
+EOF
 
 # Vérification initiale
 RUN /usr/local/bin/check-gpu
