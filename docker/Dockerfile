@@ -92,6 +92,18 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
     ctranslate2[tensorrt]
 
+# Nettoyage du venv pour réduire la taille des layers (limite BuildKit sur GitHub)
+RUN set -eux; \
+    PRECOMPILED_CUDNN="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9"; \
+    if [ -f "${PRECOMPILED_CUDNN}" ]; then \
+        echo "Removing precompiled cuDNN engines to save space"; \
+        rm -f "${PRECOMPILED_CUDNN}"; \
+    fi; \
+    find /opt/venv -type d -name "tests" -prune -exec rm -rf {} +; \
+    find /opt/venv -type d -name "__pycache__" -prune -exec rm -rf {} +; \
+    find /opt/venv -name "*.pyc" -delete; \
+    rm -rf /root/.cache /tmp/* /var/tmp/*
+
 # Copier le code
 COPY . .
 
