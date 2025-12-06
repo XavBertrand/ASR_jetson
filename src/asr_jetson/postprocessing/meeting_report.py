@@ -577,6 +577,8 @@ def _format_table_block(block: List[str]) -> List[str]:
         if not trimmed:
             continue
         cells = [cell.strip() for cell in trimmed.split("|")]
+        while cells and not cells[-1]:
+            cells.pop()
         if idx == 0:
             while cells and all(ch in "-–—" for ch in cells[-1].replace(" ", "")):
                 cells.pop()
@@ -863,6 +865,52 @@ def _normalize_bullets_outside_tables(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
+def _strip_preamble(text: str) -> str:
+    """
+    Supprime tout préambule éventuel avant la première section (### ...).
+    """
+    first_header = text.find("###")
+    if first_header == -1:
+        return text
+    return text[first_header:].lstrip()
+
+
+def _split_compound_bullets(text: str) -> str:
+    """
+    Scinde les lignes de puces qui enchaînent plusieurs éléments sur la même
+    ligne (\"- **Item1** ... - Item2 ...\") en puces distinctes.
+    """
+    split_lines: List[str] = []
+    for line in text.splitlines():
+        if "|" in line:
+            split_lines.append(line)
+            continue
+        expanded = re.sub(r"\s+-\s+(?=[*-])", "\n- ", line)
+        split_lines.extend(expanded.splitlines())
+    return "\n".join(split_lines)
+
+
+def _normalize_inline_numbering(text: str) -> str:
+    """
+    Forcer les items numérotés collés (\"1. ... 2. ...\") à revenir sur des
+    lignes distinctes et les convertir en listes à puces simples.
+    """
+    normalized: List[str] = []
+    for line in text.splitlines():
+        if "|" in line:
+            normalized.append(line)
+            continue
+        split = re.sub(r"\s+(?=\d+\.\s)", "\n", line)
+        parts = split.splitlines() or [split]
+        for part in parts:
+            match = re.match(r"^\s*\d+\.\s+(.*)", part)
+            if match:
+                normalized.append(f"- {match.group(1).strip()}")
+            else:
+                normalized.append(part)
+    return "\n".join(normalized)
+
+
 def _normalize_section_headers(text: str) -> str:
     """
     Remet chaque section (### ...) sur sa propre ligne et insère des sauts de
@@ -878,9 +926,22 @@ def _normalize_section_headers(text: str) -> str:
     for raw in cleaned.splitlines():
         line = raw.rstrip()
         if line.strip().startswith("###"):
+            # Sépare un éventuel contenu inline après le titre (ex: "### Titre - puce")
+            inline_match = re.match(r"^(###\s+[^\-]+?)(\s+-\s+.+)$", line.strip())
+            if inline_match:
+                header = inline_match.group(1).strip()
+                trailing = inline_match.group(2).strip()
+            else:
+                header = line.strip()
+                trailing = ""
             if normalized and normalized[-1].strip():
                 normalized.append("")
-            normalized.append(line.strip())
+            normalized.append(header)
+            if trailing:
+                if not trailing.startswith("-"):
+                    trailing = f"- {trailing}"
+                normalized.append("")
+                normalized.append(trailing)
             last_blank = False
             continue
         if not line.strip():
@@ -893,6 +954,102 @@ def _normalize_section_headers(text: str) -> str:
         normalized.append(line)
 
     return "\n".join(normalized).strip() + "\n"
+
+
+def _drop_lonely_markers(text: str) -> str:
+    """
+    Élimine les lignes résiduelles ne contenant qu'un « # » ou « | ».
+    """
+    cleaned: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in {"#", "|"} or re.match(r"^#{2,6}\s*$", stripped):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def _normalize_risk_opp_headers(text: str) -> str:
+    """
+    Harmonise les titres Risques / Opportunités sur le même niveau de titre.
+    """
+    normalized: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^#{3,6}\s+risques$", stripped, flags=re.IGNORECASE):
+            normalized.append("#### Risques")
+            continue
+        if re.match(r"^#{3,6}\s+opportunités$", stripped, flags=re.IGNORECASE):
+            normalized.append("#### Opportunités")
+            continue
+        normalized.append(line)
+    return "\n".join(normalized)
+
+
+def _normalize_points_sections(text: str) -> str:
+    """
+    Harmonise les listes des sections POINTS POSITIFS / POINTS DE FRICTION :
+    les items principaux restent en puces, les détails passent en sous-puces.
+    """
+    result: List[str] = []
+    in_points_block = False
+
+    def _is_points_header(line: str) -> bool:
+        stripped = line.strip().lower()
+        return stripped.startswith("### points positifs") or stripped.startswith(
+            "### points de friction"
+        )
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if _is_points_header(line):
+            in_points_block = True
+            result.append(line.strip())
+            continue
+        if stripped.startswith("### ") and not _is_points_header(line):
+            in_points_block = False
+            result.append(line)
+            continue
+        if in_points_block and stripped.startswith("- "):
+            if stripped.startswith("- **"):
+                result.append(f"- {stripped[2:].lstrip()}")
+            else:
+                result.append(f"  - {stripped[2:].lstrip()}")
+            continue
+        result.append(line)
+
+    return "\n".join(result)
+
+
+def _fix_inline_section_tables(text: str) -> str:
+    """
+    Extrait les en-têtes de section écrites à l'intérieur d'une ligne de tableau
+    (ex.: \"| ### PARTICIPANTS | ...\") et les remet sur leur propre ligne.
+    """
+    lines = text.splitlines()
+    fixed: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "|":
+            fixed.append("")
+            continue
+
+        for pattern in (r"^\|\s*###\s+([^|]+?)\s*\|\s*(.+)$", r"^###\s+([^|]+?)\s*\|\s*(.+)$"):
+            match = re.match(pattern, line)
+            if match:
+                section = match.group(1).strip()
+                rest = match.group(2).strip()
+                fixed.append(f"### {section}")
+                fixed.append("")
+                if not rest.startswith("|"):
+                    rest = f"| {rest}"
+                fixed.append(rest)
+                break
+        else:
+            fixed.append(line)
+
+    return "\n".join(fixed)
 
 
 def _strip_speaker_placeholders(text: str) -> str:
@@ -1082,9 +1239,17 @@ def generate_meeting_report(
     )
     # tables à double "||" -> un seul "|"
     analysis_deanonymized = analysis_deanonymized.replace("||", "|")
+    # retire un éventuel préambule avant la première section
+    analysis_deanonymized = _strip_preamble(analysis_deanonymized)
     # s'assure que les puces commencent sur une nouvelle ligne
     analysis_deanonymized = _normalize_bullets_outside_tables(analysis_deanonymized)
+    analysis_deanonymized = _split_compound_bullets(analysis_deanonymized)
+    analysis_deanonymized = _normalize_inline_numbering(analysis_deanonymized)
     analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
+    analysis_deanonymized = _fix_inline_section_tables(analysis_deanonymized)
+    analysis_deanonymized = _drop_lonely_markers(analysis_deanonymized)
+    analysis_deanonymized = _normalize_risk_opp_headers(analysis_deanonymized)
+    analysis_deanonymized = _normalize_points_sections(analysis_deanonymized)
     # normalise les tableaux Markdown pour conserver l'alignement dans les exports
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # supprime les lignes parasites dans la table des participants
