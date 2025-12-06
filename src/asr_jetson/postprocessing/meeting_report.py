@@ -143,6 +143,21 @@ def _build_pseudonym_hint(mapping: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_speaker_context(context: Optional[str]) -> str:
+    """
+    Mise en forme du contexte locuteurs (déjà anonymisé) pour le prompt LLM.
+    """
+    if not context:
+        return ""
+    cleaned = context.strip()
+    if not cleaned:
+        return ""
+    return (
+        "Contexte sur les interlocuteurs (pseudonymisé, fourni par l'utilisateur) :\n"
+        f"{cleaned}\n\n"
+    )
+
+
 def _normalize_llm_placeholders(text: str) -> str:
     """
     - Uniformise <org_9>, <Org_9>, <ORG_9>, et même <ORG_9...> en <ORG_9>
@@ -245,6 +260,45 @@ def _collect_known_tags(mapping: Dict[str, Any]) -> Set[str]:
             if tag:
                 tags.add(_normalize_tag_key(tag))
     return tags
+
+
+def _log_name_resolution(mapping: Dict[str, Any]) -> None:
+    """
+    Trace dans la console les correspondances pseudonyme -> nom canoniques
+    (limité aux PERSON pour rester lisible).
+    """
+    pseudo_reverse = mapping.get("pseudonym_reverse_map", {})
+    if not isinstance(pseudo_reverse, dict) or not pseudo_reverse:
+        return
+
+    pseudo_labels: Dict[str, str] = {}
+    entities = mapping.get("entities")
+    if isinstance(entities, dict):
+        for info in entities.values():
+            label = (info.get("label") or info.get("type") or "").upper()
+            pseudo = info.get("pseudonym")
+            if pseudo and label:
+                pseudo_labels[pseudo] = label
+    elif isinstance(entities, list):
+        for info in entities:
+            label = (info.get("label") or info.get("type") or "").upper()
+            pseudo = info.get("pseudonym")
+            if pseudo and label:
+                pseudo_labels[pseudo] = label
+
+    lines: List[str] = []
+    for pseudo, canonical in sorted(pseudo_reverse.items()):
+        if not canonical or pseudo == canonical:
+            continue
+        label = pseudo_labels.get(pseudo, "")
+        if label and label != "PERSON":
+            continue
+        lines.append(f"{pseudo} -> {canonical}")
+
+    if lines:
+        print("[rapport] Résolution des locuteurs :")
+        for line in lines:
+            print(f"  {line}")
 
 
 def _count_person_tags(text: str) -> Dict[str, int]:
@@ -805,6 +859,19 @@ def _normalize_bullets_outside_tables(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
+def _strip_speaker_placeholders(text: str) -> str:
+    """
+    Supprime les mentions SPEAKER_# / SPK# résiduelles pour éviter leur affichage
+    dans les rapports lorsque le contexte locuteurs est fourni.
+    """
+    cleaned = re.sub(r"\s*\(?\bSPEAKER_\d+\b\)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\bSPK\d+\b", "", cleaned, flags=re.IGNORECASE)
+    # Nettoie les espaces laissés par la suppression.
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned
+
+
 def _list_system_fonts() -> Set[str]:
     try:
         output = subprocess.check_output(
@@ -914,12 +981,16 @@ def generate_meeting_report(
     prompt_key: str = "meeting_analysis",
     out_dir: Optional[Path] = None,
     run_id: Optional[str] = None,
+    speaker_context: Optional[str] = None,
 ):
     """
     1) Lit la transcription anonymisée (txt)
     2) Lance Mistral Large avec le prompt JSON (key configurable)
     3) Désanonymise le rapport LLM via mapping
     4) Exporte TXT/Markdown et génère DOCX+PDF via pypandoc
+
+    ``speaker_context`` doit déjà être anonymisé (pseudonymes) pour éviter toute fuite
+    vers l'API ; il est injecté en préambule du prompt pour aider l'attribution des rôles.
     """
     ok, failure_reason = _check_mistral_access()
     if not ok:
@@ -941,7 +1012,8 @@ def generate_meeting_report(
     # 2) Mistral Large
     pseudonym_hint = _build_pseudonym_hint(mapping_raw)
     hint_block = f"{pseudonym_hint}\n" if pseudonym_hint else ""
-    user_payload = prompt.user_prefix + hint_block + anon_text
+    context_block = _format_speaker_context(speaker_context)
+    user_payload = prompt.user_prefix + hint_block + context_block + anon_text
     analysis_anonymized = mistral_client.chat_complete(
         model=prompt.model,
         system=prompt.system,
@@ -949,12 +1021,17 @@ def generate_meeting_report(
     )
 
     analysis_anonymized = _normalize_llm_placeholders(analysis_anonymized)
+    if speaker_context:
+        analysis_anonymized = _strip_speaker_placeholders(analysis_anonymized)
     role_hints = _extract_role_hints(analysis_anonymized, allowed_tags=relevant_tags)
 
     # 3) Désanonymisation
     mapping = _ensure_legacy_mapping(mapping_raw)
     role_hints = _refine_role_hints(role_hints, mapping, person_counts)
+    _log_name_resolution(mapping)
     analysis_deanonymized = deanonymize_text(analysis_anonymized, mapping, restore="canonical")
+    if speaker_context:
+        analysis_deanonymized = _strip_speaker_placeholders(analysis_deanonymized)
     analysis_deanonymized = _rewrite_roles(analysis_deanonymized, mapping, role_hints)
     analysis_deanonymized = _drop_unknown_tags(analysis_deanonymized, _collect_known_tags(mapping))
 
@@ -978,8 +1055,6 @@ def generate_meeting_report(
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # convertit les puces unicode en puces Markdown standard
     analysis_deanonymized = re.sub(r"^[ \t]*[•∙]", "- ", analysis_deanonymized, flags=re.MULTILINE)
-    # garantit que toutes les entités canoniques apparaissent au moins une fois
-    analysis_deanonymized = _append_missing_entities_section(analysis_deanonymized, mapping)
 
     # 4) Sauvegardes
     base = (run_id or Path(anonymized_txt_path).stem.replace("_anon_clean", ""))
