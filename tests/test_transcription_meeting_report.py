@@ -46,6 +46,13 @@ _SKIP_REASON = (
 )
 
 
+def _get_transcription_path() -> Path:
+    path = PROJECT_ROOT / "tests/data/transcription.txt"
+    if not path.exists():
+        pytest.skip(f"Fixture manquante: {path}")
+    return path
+
+
 def _collect_canonical_entities(mapping: dict) -> set[str]:
     names: set[str] = set()
     entities = mapping.get("entities", [])
@@ -79,7 +86,7 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
     Génère un rapport Markdown à partir de la transcription fixture sans dépendance
     réseau (LLM mocké) ni pypandoc.
     """
-    transcription_path = PROJECT_ROOT / "tests/data/transcription.txt"
+    transcription_path = _get_transcription_path()
     raw_text = transcription_path.read_text(encoding="utf-8")
 
     outputs_root = tmp_path / "outputs"
@@ -165,7 +172,7 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
 
 @pytest.mark.skipif(_SKIP_INTEGRATION, reason=_SKIP_REASON)
 def test_transcription_to_docx_meeting_report(tmp_path: Path):
-    transcription_path = PROJECT_ROOT / "tests/data/transcription.txt"
+    transcription_path = _get_transcription_path()
     raw_text = transcription_path.read_text(encoding="utf-8")
 
     outputs_root = tmp_path / "outputs"
@@ -236,7 +243,7 @@ def test_generate_meeting_report_calls_real_mistral(tmp_path: Path):
     txt_dir.mkdir(parents=True, exist_ok=True)
     json_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_path = PROJECT_ROOT / "tests/data/transcription.txt"
+    raw_path = _get_transcription_path()
     raw_text = raw_path.read_text(encoding="utf-8")
 
     anonymizer = TransformerAnonymizer()
