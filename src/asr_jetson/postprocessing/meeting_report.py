@@ -708,10 +708,14 @@ def _prune_participants_table(
                 i += 1
 
             filtered_block: List[str] = []
-            for block_line in table_block:
+            for idx, block_line in enumerate(table_block):
                 stripped = block_line.strip()
                 if not stripped.startswith("|"):
                     # conserve les lignes contextuelles éventuelles
+                    filtered_block.append(block_line)
+                    continue
+                if idx in (0, 1):
+                    # conserve l'en-tête et le séparateur de table
                     filtered_block.append(block_line)
                     continue
                 cells = [cell.strip().lower() for cell in stripped.strip("|").split("|")]
@@ -857,6 +861,38 @@ def _normalize_bullets_outside_tables(text: str) -> str:
             continue
         normalized_lines.append(re.sub(r"(\S)(-\s+\*\*|-\s+)", r"\1\n\2", line))
     return "\n".join(normalized_lines)
+
+
+def _normalize_section_headers(text: str) -> str:
+    """
+    Remet chaque section (### ...) sur sa propre ligne et insère des sauts de
+    ligne pour éviter les titres collés aux paragraphes ou listes.
+    """
+    cleaned = re.sub(r"\s*--\s*###", "\n\n###", text)
+    cleaned = re.sub(r"\s*-\s*###", "\n###", cleaned)
+    cleaned = re.sub(r"(?<!\n)###", r"\n###", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    normalized: List[str] = []
+    last_blank = False
+    for raw in cleaned.splitlines():
+        line = raw.rstrip()
+        if line.strip().startswith("###"):
+            if normalized and normalized[-1].strip():
+                normalized.append("")
+            normalized.append(line.strip())
+            last_blank = False
+            continue
+        if not line.strip():
+            if last_blank:
+                continue
+            last_blank = True
+            normalized.append("")
+            continue
+        last_blank = False
+        normalized.append(line)
+
+    return "\n".join(normalized).strip() + "\n"
 
 
 def _strip_speaker_placeholders(text: str) -> str:
@@ -1048,6 +1084,7 @@ def generate_meeting_report(
     analysis_deanonymized = analysis_deanonymized.replace("||", "|")
     # s'assure que les puces commencent sur une nouvelle ligne
     analysis_deanonymized = _normalize_bullets_outside_tables(analysis_deanonymized)
+    analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
     # normalise les tableaux Markdown pour conserver l'alignement dans les exports
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # supprime les lignes parasites dans la table des participants

@@ -263,6 +263,7 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "Delphine" not in anon_text and "UDAF" not in anon_text
     assert "| Alice Dupont |" in anon_text
     assert "SPEAKER_" not in anon_text
+    assert "- ###" not in anon_text
 
     # La version désanonymisée remplace bien par les vrais noms
     assert "Delphine" in deanon_text
@@ -271,6 +272,7 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "Orion Conseil" not in deanon_text
     assert "| Delphine |" in deanon_text
     assert "SPEAKER_" not in deanon_text
+    assert "- ###" not in deanon_text
 
     # Les sections ### sont bien présentes (utile pour le formatage docx)
     for section in [
