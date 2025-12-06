@@ -38,26 +38,52 @@ def _prepare_lt_home() -> str:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
             continue
-        os.environ["LT_HOME"] = str(path)
+        resolved = str(path)
+        # language_tool_python reads LTP_PATH; keep LT_HOME for compatibility.
+        os.environ.setdefault("LT_HOME", resolved)
+        os.environ.setdefault("LTP_PATH", resolved)
         return str(path)
 
     raise RuntimeError("Unable to prepare a writable LT_HOME directory.")
 
 
-# --- LanguageTool: persistent cache + shared global instance ---
-_prepare_lt_home()
-try:
-    import language_tool_python
+# --- LanguageTool: persistent cache + lazy global instance ---
+_LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
+_LT_DISABLED = os.getenv("DISABLE_LANGUAGETOOL", "").strip().lower() in {"1", "true", "yes", "on"}
+_LT_INIT_DONE = False
+_LT_INIT_ERROR: Optional[str] = None
+LT_TOOL = None
 
-    _LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
-    LT_TOOL = (
-        language_tool_python.LanguageTool("fr", remote_server=_LT_ENDPOINT)
-        if _LT_ENDPOINT
-        else language_tool_python.LanguageTool("fr")
-    )
-except Exception as _e:
-    LT_TOOL = None
-    print(f"[WARN] LanguageTool unavailable during import: {_e}")
+
+def _ensure_language_tool():
+    """
+    Lazily instantiate LanguageTool, keeping the pipeline robust when Java/binaries
+    are missing or crashy. Returns ``None`` when disabled or unavailable.
+    """
+    global _LT_INIT_DONE, _LT_INIT_ERROR, LT_TOOL
+    if LT_TOOL is not None:
+        return LT_TOOL
+    if _LT_DISABLED or _LT_INIT_DONE:
+        return None
+
+    _LT_INIT_DONE = True
+    try:
+        cache_dir = _prepare_lt_home()
+        # language_tool_python uses LTP_PATH; ensure it is set before import.
+        os.environ.setdefault("LTP_PATH", cache_dir)
+        import language_tool_python  # local import to avoid import-time side effects
+
+        LT_TOOL = (
+            language_tool_python.LanguageTool("fr", remote_server=_LT_ENDPOINT)
+            if _LT_ENDPOINT
+            else language_tool_python.LanguageTool("fr")
+        )
+        return LT_TOOL
+    except Exception as _e:
+        _LT_INIT_ERROR = str(_e)
+        LT_TOOL = None
+        print(f"[WARN] LanguageTool unavailable ({_e})")
+        return None
 
 os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
 os.environ["LLM_MODEL"] = "gemma2:2b"
@@ -497,7 +523,8 @@ def _fix_caps_with_languagetool(text: str) -> Optional[str]:
     :returns: Corrected text or ``None`` when LanguageTool is unavailable or invalidates structure.
     :rtype: Optional[str]
     """
-    if LT_TOOL is None:
+    tool = _ensure_language_tool()
+    if tool is None:
         return None
     import re
     out_lines = []
@@ -506,7 +533,7 @@ def _fix_caps_with_languagetool(text: str) -> Optional[str]:
         if not m:
             out_lines.append(line); continue
         prefix, content = m.groups()
-        matches = LT_TOOL.check(content)
+        matches = tool.check(content)
         edits = []
         for mt in matches:
             rid = (mt.ruleId or "").upper()
@@ -535,7 +562,8 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
     :rtype: Optional[str]
     """
     try:
-        if LT_TOOL is None:
+        tool = _ensure_language_tool()
+        if tool is None:
             return None
         import re, unicodedata
 
@@ -552,7 +580,7 @@ def _clean_with_languagetool(text: str) -> Optional[str]:
                 out_lines.append(line); continue
 
             prefix, content = m.groups()
-            matches = LT_TOOL.check(content)
+            matches = tool.check(content)
             edits = []
             for mt in matches:
                 rid = (mt.ruleId or "").upper()
