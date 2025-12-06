@@ -80,31 +80,37 @@ def temp_project(tmp_path: Path):
     # 1) Transcription anonymisée nettoyée (out_txt_anon_clean)
     anon_txt = outputs_txt_dir / "testfile_anon_clean.txt"
     anon_txt.write_text(
-        "Bonjour <PER_1>. Nous avons évoqué le dossier <ORG_1> et fixé une échéance au 12/11.\n",
+        "Bonjour Alice Dupont. Nous avons évoqué le dossier Orion Conseil et fixé une échéance au 12/11.\n",
         encoding="utf-8",
     )
 
     # 2) Mapping anonymisation
     mapping_json = outputs_txt_dir / "testfile_anon_mapping.json"
     mapping = {
-        "entities": [
-            {
-                "tag": "<PER_1>",
-                "type": "PERSON",
+        "entities": {
+            "<PERSON_1>": {
+                "label": "PERSON",
+                "values": ["Delphine"],
+                "variants": ["Delphine"],
                 "canonical": "Delphine",
-                "mentions": ["Delphine"],
-                "sources": ["stub"],
+                "pseudonym": "Alice Dupont",
+                "source": "stub",
             },
-            {
-                "tag": "<ORG_1>",
-                "type": "ORGANIZATION",
+            "<ORGANIZATION_1>": {
+                "label": "ORGANIZATION",
+                "values": ["UDAF"],
+                "variants": ["UDAF"],
                 "canonical": "UDAF",
-                "mentions": ["UDAF"],
-                "sources": ["stub"],
+                "pseudonym": "Orion Conseil",
+                "source": "stub",
             },
-        ],
+        },
         "summary": {"PERSON": 1, "ORGANIZATION": 1},
-        "tag_lookup": {"<PER_1>": "Delphine", "<ORG_1>": "UDAF"},
+        "reverse_map": {"<PERSON_1>": "Delphine", "<ORGANIZATION_1>": "UDAF"},
+        "pseudonym_map": {"<PERSON_1>": "Alice Dupont", "<ORGANIZATION_1>": "Orion Conseil"},
+        "pseudonym_reverse_map": {"Alice Dupont": "Delphine", "Orion Conseil": "UDAF"},
+        "placeholder_style": "pseudonym",
+        "stats": {"total": 2, "by_type": {"PERSON": 1, "ORGANIZATION": 1}},
         "meta": {"model_id": "stub"},
     }
     mapping_json.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -134,17 +140,19 @@ def temp_project(tmp_path: Path):
 def _fake_llm_output():
     return (
         "### RÉSUMÉ EXÉCUTIF\n"
-        "Point sur le dossier <ORG_1>. Décision d'avancer l'échéance.\n\n"
+        "Point sur le dossier Orion Conseil. Décision d'avancer l'échéance.\n\n"
         "### PARTICIPANTS\n"
-        "- <PER_1> / Avocat(e) / Féminin\n\n"
+        "| Pseudonyme | Catégorie | Indices contextuels | Genre |\n"
+        "| --- | --- | --- | --- |\n"
+        "| Alice Dupont | Avocat gérante | Rôle de gestion et décisions | Féminin |\n\n"
         "### SUJETS ABORDÉS\n"
         "- Dossier — résumé: échéance au 12/11 «Nous devons finaliser le dossier». \n\n"
         "### DÉCISIONS\n"
-        "- Avancer l’échéance au 12/11 — prise par <PER_1>\n\n"
+        "- Avancer l’échéance au 12/11 — prise par Alice Dupont\n\n"
         "### ACTIONS\n"
-        "- Envoyer les pièces — Responsable: <PER_1> — Échéance: 12/11\n\n"
+        "- Envoyer les pièces — Responsable: Alice Dupont — Échéance: 12/11\n\n"
         "### PROCHAINES ÉTAPES\n"
-        "- Réunion de suivi — Responsable: <PER_1> — Délai: 1 semaine\n"
+        "- Réunion de suivi — Responsable: Alice Dupont — Délai: 1 semaine\n"
     )
 
 
@@ -163,7 +171,9 @@ def test_generate_meeting_report_end_to_end_no_network(
     def fake_chat_complete(model: str, system: str, user_text: str) -> str:
         # On pourrait vérifier ici que user_text contient la transcription anonymisée
         assert "TRANSCRIPTION" in user_text  # vient de user_prefix du prompt
-        assert "<PER_1>" in user_text or "<ORG_1>" in user_text
+        assert "Alice Dupont" in user_text
+        assert "Pseudonymes détectés" in user_text  # rappel ajouté au prompt
+        assert "Delphine" not in user_text
         return _fake_llm_output()
 
     # Patch ce que meeting_report.py utilise réellement :
@@ -174,13 +184,33 @@ def test_generate_meeting_report_end_to_end_no_network(
     # On remplace la fonction par une version simple qui applique le mapping fourni.
     def fake_deanon(text: str, mapping: dict, restore: str = "canonical") -> str:
 
-        lookup = dict(mapping.get("tag_lookup", {}))
-        if not lookup:
-            for entity in mapping.get("entities", []):
-                lookup[entity["tag"]] = entity.get("canonical", entity["tag"])
+        lookup = {}
+
+        pseudo_reverse = mapping.get("pseudonym_reverse_map", {})
+        if isinstance(pseudo_reverse, dict):
+            lookup.update({k: v for k, v in pseudo_reverse.items() if k and v})
+
+        reverse_map = mapping.get("reverse_map", {})
+        if isinstance(reverse_map, dict):
+            lookup.update({k: v for k, v in reverse_map.items() if k and v})
+
+        entities = mapping.get("entities", {})
+        if isinstance(entities, dict):
+            for info in entities.values():
+                pseudonym = info.get("pseudonym")
+                canonical = info.get("canonical")
+                if pseudonym and canonical and pseudonym not in lookup:
+                    lookup[pseudonym] = canonical
+        else:
+            for entity in entities:
+                tag = entity.get("tag")
+                canonical = entity.get("canonical")
+                if tag and canonical and tag not in lookup:
+                    lookup[tag] = canonical
+
         out = text
-        for tag, real in lookup.items():
-            out = out.replace(tag, real)
+        for key, real in lookup.items():
+            out = out.replace(key, real)
         return out
 
     monkeypatch.setattr(meeting_report_mod, "deanonymize_text", fake_deanon)
@@ -226,14 +256,17 @@ def test_generate_meeting_report_end_to_end_no_network(
     anon_text = p_anon.read_text(encoding="utf-8")
     deanon_text = p_txt.read_text(encoding="utf-8")
 
-    # La version anonymisée contient encore des tags
-    assert "<PER_1>" in anon_text and "<ORG_1>" in anon_text
+    # La version anonymisée contient uniquement les pseudonymes
+    assert "Alice Dupont" in anon_text and "Orion Conseil" in anon_text
+    assert "Delphine" not in anon_text and "UDAF" not in anon_text
+    assert "| Alice Dupont |" in anon_text
 
     # La version désanonymisée remplace bien par les vrais noms
     assert "Delphine" in deanon_text
     assert "UDAF" in deanon_text
-    assert "<PER_1>" not in deanon_text
-    assert "<ORG_1>" not in deanon_text
+    assert "Alice Dupont" not in deanon_text
+    assert "Orion Conseil" not in deanon_text
+    assert "| Delphine |" in deanon_text
 
     # Les sections ### sont bien présentes (utile pour le formatage docx)
     for section in [

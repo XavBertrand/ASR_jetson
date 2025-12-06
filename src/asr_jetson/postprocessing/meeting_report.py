@@ -26,8 +26,8 @@ _PERSON_TAG_RE = re.compile(r"<\s*PERSON\s*_(\s*\d+)\s*>", re.IGNORECASE)
 _PANDOC_MD_FORMAT = "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html"
 _PREFERRED_SANS_FONTS: Tuple[str, ...] = ("Arial", "Calibri", "Liberation Sans", "DejaVu Sans")
 _ROLE_KEYWORD_HINTS = {
-    "delphine": "Delphine (avocat gérante)",
-    "marie": "Delphine (avocat gérante)",
+    "delphine": "Avocat gérante",
+    "marie": "Avocat gérante",
     "marine": "Collaborateur",
     "sylvie": "Collaborateur",
 }
@@ -77,6 +77,71 @@ def _empty_report_outputs(reason: str, status: str = "skipped") -> Dict[str, Opt
         "report_status": status,
         "report_reason": reason,
     }
+
+
+def _collect_pseudonyms_by_label(mapping: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Regroupe les pseudonymes par label (PERSON, ORGANIZATION, etc.) sans exposer
+    les noms réels. S'appuie sur la structure produite par TransformerAnonymizer.
+    """
+
+    def _add(label: str, pseudonym: Optional[str]) -> None:
+        if not pseudonym:
+            return
+        cleaned = pseudonym.strip()
+        if not cleaned:
+            return
+        normalized_label = (label or "ENTITÉ").strip() or "ENTITÉ"
+        bucket = collected.setdefault(normalized_label.upper(), [])
+        if cleaned not in bucket:
+            bucket.append(cleaned)
+
+    collected: Dict[str, List[str]] = {}
+    entities = mapping.get("entities")
+
+    if isinstance(entities, dict):
+        for info in entities.values():
+            _add(info.get("label") or info.get("type"), info.get("pseudonym"))
+    elif isinstance(entities, list):
+        for info in entities:
+            _add(info.get("label") or info.get("type"), info.get("pseudonym"))
+
+    if not collected:
+        pseudo_map = mapping.get("pseudonym_map", {})
+        if isinstance(pseudo_map, dict):
+            for pseudonym in pseudo_map.values():
+                _add("ENTITÉ", pseudonym)
+
+    return collected
+
+
+def _build_pseudonym_hint(mapping: Dict[str, Any]) -> str:
+    """
+    Construit un rappel textuel des pseudonymes à utiliser pour forcer le LLM
+    à rester dans l'espace anonymisé.
+    """
+    grouped = _collect_pseudonyms_by_label(mapping)
+    if not grouped:
+        return ""
+
+    lines = [
+        "Consigne anonymisation : tous les noms ci-dessous sont des pseudonymes.",
+        "Recopie-les tels quels et ne tente jamais de deviner les noms réels.",
+        "",
+        "Pseudonymes détectés :",
+    ]
+
+    for label in sorted(grouped.keys()):
+        values = grouped[label]
+        if not values:
+            continue
+        display_label = label.title()
+        joined = ", ".join(values)
+        lines.append(f"- {display_label} : {joined}")
+
+    lines.append("")
+    return "\n".join(lines)
+
 
 def _normalize_llm_placeholders(text: str) -> str:
     """
@@ -328,9 +393,13 @@ def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, D
 
 def _normalize_role_label(raw: str) -> str:
     lowered = raw.lower()
+    if "avocat" in lowered and ("gerant" in lowered or "gérant" in lowered or "gérante" in lowered):
+        return "Avocat gérante"
     if "delphine" in lowered:
-        return "Delphine (avocat gérante)"
+        return "Avocat gérante"
     if "collaborateur" in lowered or "collaboratrice" in lowered:
+        return "Collaborateur"
+    if "assistant" in lowered or "assistante" in lowered or "secrétaire" in lowered:
         return "Collaborateur"
     if "client" in lowered or "cliente" in lowered:
         return "Client"
@@ -366,7 +435,7 @@ def _extract_role_hints(anonymized_text: str, allowed_tags: Optional[Set[str]] =
                 if tag_cell:
                     for cell in cells:
                         normalized_role = _normalize_role_label(cell)
-                        if normalized_role in {"Delphine (avocat gérante)", "Collaborateur", "Client"}:
+                        if normalized_role in {"Avocat gérante", "Delphine (avocat gérante)", "Collaborateur", "Client"}:
                             category_cell = normalized_role
                             break
                 if tag_cell and category_cell:
@@ -378,8 +447,8 @@ def _extract_role_hints(anonymized_text: str, allowed_tags: Optional[Set[str]] =
             if allowed_tags and tag not in allowed_tags:
                 continue
             tail = line[match.end():].lower()
-            if "delphine" in tail and "avocat" in tail:
-                roles[tag] = "Delphine (avocat gérante)"
+            if "avocat" in tail and ("gerant" in tail or "gérant" in tail or "gérante" in tail or "delphine" in tail):
+                roles[tag] = "Avocat gérante"
                 continue
             if "collaborateur" in tail or "collaboratrice" in tail:
                 roles[tag] = "Collaborateur"
@@ -536,16 +605,32 @@ def _prune_participants_table(
         return text
 
     lookup = _build_tag_lookup(mapping)
+    pseudo_lookup: Dict[str, str] = {}
+    pseudo_map = mapping.get("pseudonym_map", {})
+    if isinstance(pseudo_map, dict):
+        for tag, pseudo in pseudo_map.items():
+            normalized_tag = _normalize_tag_key(tag)
+            if normalized_tag and isinstance(pseudo, str) and pseudo.strip():
+                pseudo_lookup[normalized_tag] = pseudo.strip()
+    entities = mapping.get("entities")
+    if isinstance(entities, dict):
+        for tag, info in entities.items():
+            normalized_tag = _normalize_tag_key(tag)
+            pseudo = (info or {}).get("pseudonym")
+            if normalized_tag and isinstance(pseudo, str) and pseudo.strip():
+                pseudo_lookup.setdefault(normalized_tag, pseudo.strip())
+
     allowed_keywords: Set[str] = set()
     for tag_key, role in roles.items():
         canonical = lookup.get(tag_key)
-        if not canonical:
-            continue
-        canonical_lower = canonical.lower()
-        if "delphine" in role.lower():
+        canonical_lower = canonical.lower() if canonical else ""
+        pseudo_lower = pseudo_lookup.get(tag_key, "").lower()
+        if "delphine" in role.lower() or "avocat" in role.lower():
             allowed_keywords.add("delphine")
-        else:
+        if canonical_lower:
             allowed_keywords.add(canonical_lower)
+        if pseudo_lower:
+            allowed_keywords.add(pseudo_lower)
     if not allowed_keywords:
         return text
 
@@ -561,9 +646,9 @@ def _prune_participants_table(
             table_block: List[str] = []
             while i < len(lines):
                 current = lines[i]
-                if not current.strip():
-                    break
                 if current.strip().startswith("### "):
+                    break
+                if not current.strip() and table_block:
                     break
                 table_block.append(current)
                 i += 1
@@ -572,6 +657,7 @@ def _prune_participants_table(
             for block_line in table_block:
                 stripped = block_line.strip()
                 if not stripped.startswith("|"):
+                    # conserve les lignes contextuelles éventuelles
                     filtered_block.append(block_line)
                     continue
                 cells = [cell.strip().lower() for cell in stripped.strip("|").split("|")]
@@ -689,6 +775,7 @@ def _rewrite_roles(
 
 
 _INVENTED_TAG_RE = re.compile(r"<\s*([A-Za-z]+(?:_[A-Za-z0-9]+)?)\s*>")
+_ALLOWED_HTML_TAGS = {"BR"}
 
 
 def _drop_unknown_tags(text: str, known_tags: Set[str]) -> str:
@@ -697,9 +784,25 @@ def _drop_unknown_tags(text: str, known_tags: Set[str]) -> str:
 
     def _repl(match: re.Match[str]) -> str:
         tag = _normalize_tag_key(match.group(1))
+        if tag in _ALLOWED_HTML_TAGS:
+            return match.group(0)
         return "" if tag not in known_tags else match.group(0)
 
     return _INVENTED_TAG_RE.sub(_repl, text)
+
+
+def _normalize_bullets_outside_tables(text: str) -> str:
+    """
+    Force a newline before list bullets, but skip Markdown table rows to avoid
+    breaking column alignment.
+    """
+    normalized_lines: List[str] = []
+    for line in text.splitlines():
+        if "|" in line:
+            normalized_lines.append(line)
+            continue
+        normalized_lines.append(re.sub(r"(\S)(-\s+\*\*|-\s+)", r"\1\n\2", line))
+    return "\n".join(normalized_lines)
 
 
 def _list_system_fonts() -> Set[str]:
@@ -836,8 +939,14 @@ def generate_meeting_report(
     relevant_tags = _select_relevant_person_tags(mapping_raw, person_counts)
 
     # 2) Mistral Large
-    user_payload = prompt.user_prefix + anon_text
-    analysis_anonymized = mistral_client.chat_complete(model=prompt.model, system=prompt.system, user_text=user_payload)
+    pseudonym_hint = _build_pseudonym_hint(mapping_raw)
+    hint_block = f"{pseudonym_hint}\n" if pseudonym_hint else ""
+    user_payload = prompt.user_prefix + hint_block + anon_text
+    analysis_anonymized = mistral_client.chat_complete(
+        model=prompt.model,
+        system=prompt.system,
+        user_text=user_payload,
+    )
 
     analysis_anonymized = _normalize_llm_placeholders(analysis_anonymized)
     role_hints = _extract_role_hints(analysis_anonymized, allowed_tags=relevant_tags)
@@ -852,11 +961,16 @@ def generate_meeting_report(
     # — Nettoyage léger —
     # normalise quelques séparateurs Markdown et petites incohérences de formatage
     analysis_deanonymized = analysis_deanonymized.replace("\r\n", "\n")
-    analysis_deanonymized = re.sub(r"\n?---\n?", "\n\n", analysis_deanonymized)
+    # Ne supprime que les règles horizontales solitaires, pas les séparateurs de tables
+    analysis_deanonymized = re.sub(
+        r"(?m)^\s*---\s*$",
+        "\n\n",
+        analysis_deanonymized,
+    )
     # tables à double "||" -> un seul "|"
     analysis_deanonymized = analysis_deanonymized.replace("||", "|")
     # s'assure que les puces commencent sur une nouvelle ligne
-    analysis_deanonymized = re.sub(r"(\S)(-\s+\*\*|-\s+)", r"\1\n\2", analysis_deanonymized)
+    analysis_deanonymized = _normalize_bullets_outside_tables(analysis_deanonymized)
     # normalise les tableaux Markdown pour conserver l'alignement dans les exports
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # supprime les lignes parasites dans la table des participants

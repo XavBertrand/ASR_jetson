@@ -135,11 +135,9 @@ class PipelineConfig:
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
     anon_catalog: Optional[Path] = None  # JSON/TXT catalog path
     anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON
-    anon_catalog_fuzzy: int = 90  # legacy knob (unused with the Ollama anonymizer)
+    anon_catalog_fuzzy: int = 90  # legacy knob
     anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
-    anon_ollama_url: str = "http://localhost:11434"
-    anon_llm_model: str = "alibayram/ministral-3b-instruct:latest"
-    anon_ollama_timeout: int = 30
+    # LLM clean-up uses environment variables (LLM_ENDPOINT/LLM_MODEL/LLM_API_KEY/USE_OLLAMA).
     anon_enable_llm_qc: bool = True
     anon_max_block_chars: int = 1200
     anon_max_block_sents: int = 5
