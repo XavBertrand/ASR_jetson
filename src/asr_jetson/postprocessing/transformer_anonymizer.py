@@ -301,7 +301,10 @@ class TransformerAnonymizer:
         }
         self.generic_blocklist = self.person_blocklist | {
             "sms", "whatsapp", "mail", "mails", "email", "emails", "tennis", "lundi", "mardi",
-            "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
+            "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+            "client", "clients", "organisation", "organisations", "entreprise", "entreprises",
+            "avocat", "avocats", "cabinet", "ligne", "telephone", "téléphone", "compte",
+            "entrepreneur", "entrepreneuriat", "contact", "contacts"
         }
 
     def analyze(self, text: str) -> List[Dict[str, Any]]:
