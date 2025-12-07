@@ -204,9 +204,12 @@ jobs:
           ARM64_DIGEST="${{ steps.build_arm64.outputs.digest }}"
           AMD64_DIGEST="${{ steps.build_amd64.outputs.digest }}"
           IMAGE="${{ env.IMAGE_NAME }}"
+          TAGS="${{ steps.meta.outputs.tags }}"
           echo "Arm64 digest: ${ARM64_DIGEST}"
           echo "Amd64 digest: ${AMD64_DIGEST}"
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          echo "Tags to publish:"
+          echo "${TAGS}"
+          for tag in ${TAGS}; do
             echo "Pushing manifest for ${tag}"
             docker buildx imagetools create -t "${tag}" \
               "${IMAGE}@${AMD64_DIGEST}" \
@@ -214,7 +217,7 @@ jobs:
           done
 
           # Sanity check on the branch tag if present
-          if echo "${{ steps.meta.outputs.tags }}" | grep -q "${IMAGE}:${{ steps.vars.outputs.branch }}"; then
+          if echo "${TAGS}" | grep -q "${IMAGE}:${{ steps.vars.outputs.branch }}"; then
             docker buildx imagetools inspect "${IMAGE}:${{ steps.vars.outputs.branch }}"
           fi
 
