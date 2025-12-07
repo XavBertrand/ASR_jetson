@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+import unicodedata
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import asr_jetson.postprocessing.mistral_client as mistral_client
@@ -39,6 +40,19 @@ _PERSON_CANONICAL_ALIASES = {
     "marine.": "Marine",
 }
 _DEFAULT_MISTRAL_HEALTHCHECK_URL = "https://api.mistral.ai/v1/models"
+_MAIN_SECTIONS = [
+    "RÉSUMÉ EXÉCUTIF",
+    "PARTICIPANTS",
+    "SUJETS ABORDÉS",
+    "DÉCISIONS",
+    "ACTIONS",
+    "PROCHAINES ÉTAPES",
+    "ANALYSE DES RISQUES ET OPPORTUNITÉS",
+    "CHIFFRES ET REPÈRES TEMPORELS",
+    "POINTS POSITIFS EXPRIMÉS",
+    "POINTS DE FRICTION OU DIFFICULTÉS",
+]
+_MAIN_SECTIONS_REGEX = "|".join(re.escape(title) for title in _MAIN_SECTIONS)
 
 
 def _check_mistral_access(timeout: float = 5.0) -> Tuple[bool, str]:
@@ -143,6 +157,61 @@ def _build_pseudonym_hint(mapping: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_speaker_context(context: Optional[str]) -> str:
+    """
+    Mise en forme du contexte locuteurs (déjà anonymisé) pour le prompt LLM.
+    """
+    if not context:
+        return ""
+    cleaned = context.strip()
+    if not cleaned:
+        return ""
+    return (
+        "Contexte sur les interlocuteurs (pseudonymisé, fourni par l'utilisateur) :\n"
+        f"{cleaned}\n\n"
+    )
+
+
+def _normalize_title_key(text: str) -> str:
+    """
+    Supprime les accents et harmonise la casse pour comparer les titres de section.
+    """
+    normalized = unicodedata.normalize("NFD", text or "")
+    normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+    return normalized.upper().strip()
+
+
+def _split_section_header_line(line: str) -> Tuple[str, str]:
+    """
+    Sépare un éventuel contenu placé sur la même ligne que le titre de section.
+    Retourne (header, trailing_content).
+    """
+    stripped = line.strip()
+    if not stripped.startswith("###"):
+        return stripped, ""
+
+    # ### 1. RÉSUMÉ EXÉCUTIF du texte supplémentaire
+    match = re.match(
+        rf"^(###\s+(?:\d+[.)]\s+)?)(?:({_MAIN_SECTIONS_REGEX}))(.*)$",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return stripped, ""
+
+    prefix = match.group(1).strip()
+    raw_title = match.group(2).strip()
+    trailing = (match.group(3) or "").strip()
+
+    normalized_title = _normalize_title_key(raw_title)
+    canonical_title = next(
+        (title for title in _MAIN_SECTIONS if _normalize_title_key(title) == normalized_title),
+        raw_title,
+    )
+    header = f"{prefix} {canonical_title}".strip()
+    return header, trailing
+
+
 def _normalize_llm_placeholders(text: str) -> str:
     """
     - Uniformise <org_9>, <Org_9>, <ORG_9>, et même <ORG_9...> en <ORG_9>
@@ -245,6 +314,45 @@ def _collect_known_tags(mapping: Dict[str, Any]) -> Set[str]:
             if tag:
                 tags.add(_normalize_tag_key(tag))
     return tags
+
+
+def _log_name_resolution(mapping: Dict[str, Any]) -> None:
+    """
+    Trace dans la console les correspondances pseudonyme -> nom canoniques
+    (limité aux PERSON pour rester lisible).
+    """
+    pseudo_reverse = mapping.get("pseudonym_reverse_map", {})
+    if not isinstance(pseudo_reverse, dict) or not pseudo_reverse:
+        return
+
+    pseudo_labels: Dict[str, str] = {}
+    entities = mapping.get("entities")
+    if isinstance(entities, dict):
+        for info in entities.values():
+            label = (info.get("label") or info.get("type") or "").upper()
+            pseudo = info.get("pseudonym")
+            if pseudo and label:
+                pseudo_labels[pseudo] = label
+    elif isinstance(entities, list):
+        for info in entities:
+            label = (info.get("label") or info.get("type") or "").upper()
+            pseudo = info.get("pseudonym")
+            if pseudo and label:
+                pseudo_labels[pseudo] = label
+
+    lines: List[str] = []
+    for pseudo, canonical in sorted(pseudo_reverse.items()):
+        if not canonical or pseudo == canonical:
+            continue
+        label = pseudo_labels.get(pseudo, "")
+        if label and label != "PERSON":
+            continue
+        lines.append(f"{pseudo} -> {canonical}")
+
+    if lines:
+        print("[rapport] Résolution des locuteurs :")
+        for line in lines:
+            print(f"  {line}")
 
 
 def _count_person_tags(text: str) -> Dict[str, int]:
@@ -514,6 +622,16 @@ def _append_role_suffix(text: str, canonical: str, suffix: str) -> Tuple[str, bo
     return new_text, bool(count)
 
 
+def _strip_table_bullet_prefix(line: str) -> Tuple[str, bool]:
+    """
+    Retire un éventuel préfixe de puce (« - » ou « * ») placé juste avant un tableau Markdown.
+    """
+    match = re.match(r"^[ \t]*[-*+]\s*(\|.+)$", line)
+    if not match:
+        return line, False
+    return match.group(1), True
+
+
 def _format_table_block(block: List[str]) -> List[str]:
     rows: List[List[str]] = []
     max_cols = 0
@@ -523,6 +641,8 @@ def _format_table_block(block: List[str]) -> List[str]:
         if not trimmed:
             continue
         cells = [cell.strip() for cell in trimmed.split("|")]
+        while cells and not cells[-1]:
+            cells.pop()
         if idx == 0:
             while cells and all(ch in "-–—" for ch in cells[-1].replace(" ", "")):
                 cells.pop()
@@ -559,7 +679,8 @@ def _normalize_markdown_tables(text: str) -> str:
     i = 0
 
     while i < len(lines):
-        line = lines[i]
+        raw_line = lines[i]
+        line, _ = _strip_table_bullet_prefix(raw_line)
         stripped = line.strip()
         if (
             "|" in line
@@ -572,7 +693,8 @@ def _normalize_markdown_tables(text: str) -> str:
             j = i
             last_had_pipe = False
             while j < len(lines):
-                current = lines[j]
+                current_raw = lines[j]
+                current, _ = _strip_table_bullet_prefix(current_raw)
                 current_stripped = current.strip()
                 if not current_stripped:
                     break
@@ -581,7 +703,7 @@ def _normalize_markdown_tables(text: str) -> str:
                     last_had_pipe = True
                     j += 1
                     continue
-                if last_had_pipe and current.startswith(" "):
+                if last_had_pipe and current_raw.startswith(" "):
                     block[-1] = block[-1].rstrip() + " " + current_stripped
                     j += 1
                     continue
@@ -590,7 +712,7 @@ def _normalize_markdown_tables(text: str) -> str:
                 normalized_lines.extend(_format_table_block(block))
                 i = j
                 continue
-        normalized_lines.append(line)
+        normalized_lines.append(raw_line)
         i += 1
 
     return "\n".join(normalized_lines)
@@ -654,10 +776,14 @@ def _prune_participants_table(
                 i += 1
 
             filtered_block: List[str] = []
-            for block_line in table_block:
+            for idx, block_line in enumerate(table_block):
                 stripped = block_line.strip()
                 if not stripped.startswith("|"):
                     # conserve les lignes contextuelles éventuelles
+                    filtered_block.append(block_line)
+                    continue
+                if idx in (0, 1):
+                    # conserve l'en-tête et le séparateur de table
                     filtered_block.append(block_line)
                     continue
                 cells = [cell.strip().lower() for cell in stripped.strip("|").split("|")]
@@ -805,6 +931,318 @@ def _normalize_bullets_outside_tables(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
+def _strip_preamble(text: str) -> str:
+    """
+    Supprime tout préambule éventuel avant la première section (### ...).
+    """
+    first_header = text.find("###")
+    if first_header == -1:
+        return text
+    return text[first_header:].lstrip()
+
+
+def _split_compound_bullets(text: str) -> str:
+    """
+    Scinde les lignes de puces qui enchaînent plusieurs éléments sur la même
+    ligne (\"- **Item1** ... - Item2 ...\") en puces distinctes.
+    """
+    split_lines: List[str] = []
+    for line in text.splitlines():
+        if "|" in line:
+            split_lines.append(line)
+            continue
+        expanded = re.sub(r"\s+-\s+(?=[*-])", "\n- ", line)
+        split_lines.extend(expanded.splitlines())
+    return "\n".join(split_lines)
+
+
+def _normalize_inline_numbering(text: str) -> str:
+    """
+    Forcer les items numérotés collés (\"1. ... 2. ...\") à revenir sur des
+    lignes distinctes tout en conservant la numérotation.
+    """
+    normalized: List[str] = []
+    for raw_line in text.splitlines():
+        if "|" in raw_line:
+            normalized.append(raw_line)
+            continue
+        if raw_line.lstrip().startswith("#"):
+            normalized.append(raw_line.rstrip())
+            continue
+
+        line = raw_line.rstrip()
+        if not line:
+            normalized.append("")
+            continue
+
+        split = re.sub(r"\s+(?=\d+\.\s)", "\n", line)
+        parts = split.splitlines() or [split]
+        for part in parts:
+            stripped = part.strip()
+            if not stripped:
+                normalized.append("")
+                continue
+            match = re.match(r"^(\d+)\.\s+(.*)", stripped)
+            if match:
+                normalized.append(f"{match.group(1)}. {match.group(2).strip()}")
+            else:
+                normalized.append(stripped)
+    return "\n".join(normalized)
+
+
+def _normalize_section_headers(text: str) -> str:
+    """
+    Remet chaque section (### ...) sur sa propre ligne et insère des sauts de
+    ligne pour éviter les titres collés aux paragraphes ou listes.
+    """
+    cleaned = re.sub(r"\s*--\s*###", "\n\n###", text)
+    cleaned = re.sub(r"\s*-\s*###", "\n###", cleaned)
+    cleaned = re.sub(r"(?<!\n)###", r"\n###", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    normalized: List[str] = []
+    last_blank = False
+    for raw in cleaned.splitlines():
+        line = raw.rstrip()
+        if line.strip().startswith("###"):
+            header, trailing = _split_section_header_line(line.strip())
+            if normalized and normalized[-1].strip():
+                normalized.append("")
+            normalized.append(header)
+            if trailing:
+                trailing = trailing.lstrip("-–—: ").strip()
+                if trailing and not trailing.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
+                    trailing = f"- {trailing}"
+                if trailing:
+                    normalized.append("")
+                    normalized.append(trailing)
+            last_blank = False
+            continue
+        if not line.strip():
+            if last_blank:
+                continue
+            last_blank = True
+            normalized.append("")
+            continue
+        last_blank = False
+        normalized.append(line)
+
+    return "\n".join(normalized).strip() + "\n"
+
+
+def _number_main_sections(text: str) -> str:
+    """
+    Préfixe systématiquement les sections principales par un numéro ordonné (1..N)
+    pour garantir une arborescence stable dans le rendu Markdown.
+    """
+    normalized: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^####", stripped):
+            normalized.append(line.rstrip())
+            continue
+
+        # Titres déjà au bon format
+        if re.match(r"^###", stripped):
+            header = re.sub(r"^#+\s*", "", stripped)
+            header = re.sub(r"^\d+[.)]\s*", "", header)
+        else:
+            header = re.sub(r"^\d+[.)]\s*", "", stripped)
+
+        header_key = _normalize_title_key(header)
+        matched_title = None
+        for title in _MAIN_SECTIONS:
+            if _normalize_title_key(title) == header_key or header_key.startswith(
+                _normalize_title_key(title)
+            ):
+                matched_title = title
+                break
+
+        if matched_title:
+            section_idx = _MAIN_SECTIONS.index(matched_title) + 1
+            normalized.append(f"### {section_idx}. {matched_title}")
+            continue
+
+        normalized.append(line.rstrip())
+    return "\n".join(normalized)
+
+
+def _drop_lonely_markers(text: str) -> str:
+    """
+    Élimine les lignes résiduelles ne contenant qu'un « # » ou « | ».
+    """
+    cleaned: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped in {"#", "|"} or re.match(r"^#{2,6}\s*$", stripped):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
+def _normalize_risk_opp_headers(text: str) -> str:
+    """
+    Harmonise les titres Risques / Opportunités sur le même niveau de titre.
+    """
+    normalized: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^#{3,6}\s+risques$", stripped, flags=re.IGNORECASE):
+            normalized.append("#### Risques")
+            continue
+        if re.match(r"^#{3,6}\s+opportunités$", stripped, flags=re.IGNORECASE):
+            normalized.append("#### Opportunités")
+            continue
+        normalized.append(line)
+    return "\n".join(normalized)
+
+
+def _normalize_points_sections(text: str) -> str:
+    """
+    Harmonise les listes des sections POINTS POSITIFS / POINTS DE FRICTION :
+    les items principaux restent en puces, les détails passent en sous-puces.
+    """
+    result: List[str] = []
+    in_points_block = False
+
+    def _is_points_header(line: str) -> bool:
+        stripped = line.strip().lower()
+        return stripped.startswith("### points positifs") or stripped.startswith(
+            "### points de friction"
+        )
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if _is_points_header(line):
+            in_points_block = True
+            result.append(line.strip())
+            continue
+        if stripped.startswith("### ") and not _is_points_header(line):
+            in_points_block = False
+            result.append(line)
+            continue
+        if in_points_block and stripped.startswith("- "):
+            if stripped.startswith("- **"):
+                result.append(f"- {stripped[2:].lstrip()}")
+            else:
+                result.append(f"  - {stripped[2:].lstrip()}")
+            continue
+        result.append(line)
+
+    return "\n".join(result)
+
+
+def _indent_numbered_children(text: str) -> str:
+    """
+    Indente les sous-puces qui suivent un item numéroté (1., 2., etc.) pour
+    rendre la hiérarchie lisible dans les exports Markdown/Docx/PDF.
+    """
+    result: List[str] = []
+    in_numbered_block = False
+
+    for line in text.splitlines():
+        stripped = line.lstrip()
+
+        if "|" in line or stripped.startswith("###"):
+            in_numbered_block = False
+            result.append(line.rstrip())
+            continue
+
+        if not stripped:
+            in_numbered_block = False
+            result.append("")
+            continue
+
+        if re.match(r"^\d+\.\s", stripped):
+            in_numbered_block = True
+            result.append(stripped)
+            continue
+
+        if in_numbered_block and stripped.startswith("- "):
+            result.append(f"  {stripped}")
+            continue
+
+        result.append(line.rstrip())
+
+    return "\n".join(result)
+
+
+def _split_residual_inline_items(text: str) -> str:
+    """
+    Dernier filet de sécurité : éclate les items numérotés ou puces restés sur
+    la même ligne pour garantir une arborescence lisible.
+    """
+    lines: List[str] = []
+    for raw_line in text.splitlines():
+        if "|" in raw_line:
+            lines.append(raw_line.rstrip())
+            continue
+        if raw_line.lstrip().startswith("#"):
+            lines.append(raw_line.rstrip())
+            continue
+
+        working = re.sub(r"\s+(?=\d+\.\s)", "\n", raw_line)
+        working = re.sub(r"\s+-\s+(?=[*-])", "\n- ", working)
+        parts = working.splitlines()
+        if not parts:
+            lines.append("")
+            continue
+        lines.extend(part.rstrip() for part in parts)
+
+    return "\n".join(lines)
+
+
+def _strip_trailing_markers(text: str) -> str:
+    """
+    Supprime les marqueurs résiduels type \"--\" laissés en fin de bloc.
+    """
+    return re.sub(r"\s*--\s*$", "", text, flags=re.MULTILINE)
+
+
+def _fix_inline_section_tables(text: str) -> str:
+    """
+    Extrait les en-têtes de section écrites à l'intérieur d'une ligne de tableau
+    (ex.: \"| ### PARTICIPANTS | ...\") et les remet sur leur propre ligne.
+    """
+    lines = text.splitlines()
+    fixed: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "|":
+            fixed.append("")
+            continue
+
+        for pattern in (r"^\|\s*###\s+([^|]+?)\s*\|\s*(.+)$", r"^###\s+([^|]+?)\s*\|\s*(.+)$"):
+            match = re.match(pattern, line)
+            if match:
+                section = match.group(1).strip()
+                rest = match.group(2).strip()
+                fixed.append(f"### {section}")
+                fixed.append("")
+                if not rest.startswith("|"):
+                    rest = f"| {rest}"
+                fixed.append(rest)
+                break
+        else:
+            fixed.append(line)
+
+    return "\n".join(fixed)
+
+
+def _strip_speaker_placeholders(text: str) -> str:
+    """
+    Supprime les mentions SPEAKER_# / SPK# résiduelles pour éviter leur affichage
+    dans les rapports lorsque le contexte locuteurs est fourni.
+    """
+    cleaned = re.sub(r"\s*\(?\bSPEAKER_\d+\b\)?", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\bSPK\d+\b", "", cleaned, flags=re.IGNORECASE)
+    # Nettoie les espaces laissés par la suppression.
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    return cleaned
+
+
 def _list_system_fonts() -> Set[str]:
     try:
         output = subprocess.check_output(
@@ -914,12 +1352,16 @@ def generate_meeting_report(
     prompt_key: str = "meeting_analysis",
     out_dir: Optional[Path] = None,
     run_id: Optional[str] = None,
+    speaker_context: Optional[str] = None,
 ):
     """
     1) Lit la transcription anonymisée (txt)
     2) Lance Mistral Large avec le prompt JSON (key configurable)
     3) Désanonymise le rapport LLM via mapping
     4) Exporte TXT/Markdown et génère DOCX+PDF via pypandoc
+
+    ``speaker_context`` doit déjà être anonymisé (pseudonymes) pour éviter toute fuite
+    vers l'API ; il est injecté en préambule du prompt pour aider l'attribution des rôles.
     """
     ok, failure_reason = _check_mistral_access()
     if not ok:
@@ -941,7 +1383,8 @@ def generate_meeting_report(
     # 2) Mistral Large
     pseudonym_hint = _build_pseudonym_hint(mapping_raw)
     hint_block = f"{pseudonym_hint}\n" if pseudonym_hint else ""
-    user_payload = prompt.user_prefix + hint_block + anon_text
+    context_block = _format_speaker_context(speaker_context)
+    user_payload = prompt.user_prefix + hint_block + context_block + anon_text
     analysis_anonymized = mistral_client.chat_complete(
         model=prompt.model,
         system=prompt.system,
@@ -949,12 +1392,17 @@ def generate_meeting_report(
     )
 
     analysis_anonymized = _normalize_llm_placeholders(analysis_anonymized)
+    if speaker_context:
+        analysis_anonymized = _strip_speaker_placeholders(analysis_anonymized)
     role_hints = _extract_role_hints(analysis_anonymized, allowed_tags=relevant_tags)
 
     # 3) Désanonymisation
     mapping = _ensure_legacy_mapping(mapping_raw)
     role_hints = _refine_role_hints(role_hints, mapping, person_counts)
+    _log_name_resolution(mapping)
     analysis_deanonymized = deanonymize_text(analysis_anonymized, mapping, restore="canonical")
+    if speaker_context:
+        analysis_deanonymized = _strip_speaker_placeholders(analysis_deanonymized)
     analysis_deanonymized = _rewrite_roles(analysis_deanonymized, mapping, role_hints)
     analysis_deanonymized = _drop_unknown_tags(analysis_deanonymized, _collect_known_tags(mapping))
 
@@ -969,8 +1417,21 @@ def generate_meeting_report(
     )
     # tables à double "||" -> un seul "|"
     analysis_deanonymized = analysis_deanonymized.replace("||", "|")
-    # s'assure que les puces commencent sur une nouvelle ligne
+    # retire un éventuel préambule avant la première section
+    analysis_deanonymized = _strip_preamble(analysis_deanonymized)
+    analysis_deanonymized = _strip_trailing_markers(analysis_deanonymized)
+    analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
     analysis_deanonymized = _normalize_bullets_outside_tables(analysis_deanonymized)
+    analysis_deanonymized = _split_compound_bullets(analysis_deanonymized)
+    analysis_deanonymized = _normalize_inline_numbering(analysis_deanonymized)
+    analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
+    analysis_deanonymized = _number_main_sections(analysis_deanonymized)
+    analysis_deanonymized = _fix_inline_section_tables(analysis_deanonymized)
+    analysis_deanonymized = _drop_lonely_markers(analysis_deanonymized)
+    analysis_deanonymized = _normalize_risk_opp_headers(analysis_deanonymized)
+    analysis_deanonymized = _indent_numbered_children(analysis_deanonymized)
+    analysis_deanonymized = _normalize_points_sections(analysis_deanonymized)
+    analysis_deanonymized = _split_residual_inline_items(analysis_deanonymized)
     # normalise les tableaux Markdown pour conserver l'alignement dans les exports
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # supprime les lignes parasites dans la table des participants
@@ -978,8 +1439,6 @@ def generate_meeting_report(
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # convertit les puces unicode en puces Markdown standard
     analysis_deanonymized = re.sub(r"^[ \t]*[•∙]", "- ", analysis_deanonymized, flags=re.MULTILINE)
-    # garantit que toutes les entités canoniques apparaissent au moins une fois
-    analysis_deanonymized = _append_missing_entities_section(analysis_deanonymized, mapping)
 
     # 4) Sauvegardes
     base = (run_id or Path(anonymized_txt_path).stem.replace("_anon_clean", ""))

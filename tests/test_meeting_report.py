@@ -172,6 +172,7 @@ def test_generate_meeting_report_end_to_end_no_network(
         # On pourrait vérifier ici que user_text contient la transcription anonymisée
         assert "TRANSCRIPTION" in user_text  # vient de user_prefix du prompt
         assert "Alice Dupont" in user_text
+        assert "Contexte sur les interlocuteurs" in user_text
         assert "Pseudonymes détectés" in user_text  # rappel ajouté au prompt
         assert "Delphine" not in user_text
         return _fake_llm_output()
@@ -229,6 +230,7 @@ def test_generate_meeting_report_end_to_end_no_network(
         prompt_key="meeting_analysis",
         out_dir=outputs_txt_dir,       # on sort dans outputs/txt
         run_id="testfile",
+        speaker_context="Entretien entre Alice Dupont (avocat gérante) et un client.",
     )
 
     # === 4) Vérifications des chemins retournés ===
@@ -260,6 +262,8 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "Alice Dupont" in anon_text and "Orion Conseil" in anon_text
     assert "Delphine" not in anon_text and "UDAF" not in anon_text
     assert "| Alice Dupont |" in anon_text
+    assert "SPEAKER_" not in anon_text
+    assert "- ###" not in anon_text
 
     # La version désanonymisée remplace bien par les vrais noms
     assert "Delphine" in deanon_text
@@ -267,15 +271,17 @@ def test_generate_meeting_report_end_to_end_no_network(
     assert "Alice Dupont" not in deanon_text
     assert "Orion Conseil" not in deanon_text
     assert "| Delphine |" in deanon_text
+    assert "SPEAKER_" not in deanon_text
+    assert "- ###" not in deanon_text
 
     # Les sections ### sont bien présentes (utile pour le formatage docx)
     for section in [
-        "### RÉSUMÉ EXÉCUTIF",
-        "### PARTICIPANTS",
-        "### SUJETS ABORDÉS",
-        "### DÉCISIONS",
-        "### ACTIONS",
-        "### PROCHAINES ÉTAPES",
+        "### 1. RÉSUMÉ EXÉCUTIF",
+        "### 2. PARTICIPANTS",
+        "### 3. SUJETS ABORDÉS",
+        "### 4. DÉCISIONS",
+        "### 5. ACTIONS",
+        "### 6. PROCHAINES ÉTAPES",
     ]:
         assert section in deanon_text
 
