@@ -52,7 +52,12 @@ def _sec(x_samples: int, sr: int = 16000) -> float:
 #
 #     return results
 
-def transcribe_full(model: Any, wav_path: str | Path, language: str | None = None) -> List[Dict[str, Any]]:
+def transcribe_full(
+    model: Any,
+    wav_path: str | Path,
+    language: str | None = None,
+    initial_prompt: str | None = None,
+) -> List[Dict[str, Any]]:
     """
     Perform a single ASR pass over the entire audio file.
 
@@ -62,6 +67,8 @@ def transcribe_full(model: Any, wav_path: str | Path, language: str | None = Non
     :type wav_path: str | Path
     :param language: Optional forced language code supplied to the decoder.
     :type language: str | None
+    :param initial_prompt: Optional context prompt forwarded to Faster-Whisper.
+    :type initial_prompt: str | None
     :returns: List of segment dictionaries with ``start``, ``end``, and ``text``.
     :rtype: List[Dict[str, Any]]
     """
@@ -88,7 +95,7 @@ def transcribe_full(model: Any, wav_path: str | Path, language: str | None = Non
         log_prob_threshold=-1.0,
 
         # Optional neutral prompt.
-        initial_prompt=None,
+        initial_prompt=initial_prompt,
     )
     out = []
     for s in segments:
@@ -127,6 +134,7 @@ def transcribe_segments(
     wav_path: str | Path,
     diar_segments: List[Dict[str, Any]],
     language: str | None = None,
+    initial_prompt: str | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Use Faster-Whisper defaults to transcribe diarised segments.
@@ -139,10 +147,17 @@ def transcribe_segments(
     :type diar_segments: List[Dict[str, Any]]
     :param language: Optional forced language code supplied to the decoder.
     :type language: str | None
+    :param initial_prompt: Optional context prompt forwarded to Faster-Whisper.
+    :type initial_prompt: str | None
     :returns: ASR segment list describing decoded windows.
     :rtype: List[Dict[str, Any]]
     """
-    asr_segments = transcribe_full(model, wav_path, language=language)
+    asr_segments = transcribe_full(
+        model,
+        wav_path,
+        language=language,
+        initial_prompt=initial_prompt,
+    )
     # diar_text = text_by_diar_window(diar_segments, asr_segments)  # Keep disabled; it breaks alignment.
     return asr_segments
 

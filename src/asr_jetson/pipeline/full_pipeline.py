@@ -3,8 +3,10 @@ Full ASR pipeline orchestration, spanning preprocessing, diarization, ASR,
 and post-processing exports.
 """
 from __future__ import annotations
+import copy
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import json
 import os
 import torch
@@ -135,11 +137,9 @@ class PipelineConfig:
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
     anon_catalog: Optional[Path] = None  # JSON/TXT catalog path
     anon_catalog_label: str = "CAT"  # default label when the catalog is plain text/JSON
-    anon_catalog_fuzzy: int = 90  # legacy knob (unused with the Ollama anonymizer)
+    anon_catalog_fuzzy: int = 90  # legacy knob
     anon_catalog_as_person: bool = True  # treat catalog entries as potential PERSON entities
-    anon_ollama_url: str = "http://localhost:11434"
-    anon_llm_model: str = "alibayram/ministral-3b-instruct:latest"
-    anon_ollama_timeout: int = 30
+    # LLM clean-up uses environment variables (LLM_ENDPOINT/LLM_MODEL/LLM_API_KEY/USE_OLLAMA).
     anon_enable_llm_qc: bool = True
     anon_max_block_chars: int = 1200
     anon_max_block_sents: int = 5
@@ -147,6 +147,78 @@ class PipelineConfig:
     meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
     meeting_report_prompt_key: str = "meeting_analysis"
     presidio_python: Path = Path(".venv-presidio/bin/python")
+    speaker_context: Optional[str] = None
+    asr_prompt: Optional[str] = None
+
+
+def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Merge a secondary anonymisation mapping (e.g. speaker context) into the base mapping
+    while avoiding tag collisions.
+    """
+    if not extra:
+        return base
+
+    merged = copy.deepcopy(base) if base else {}
+    merged_entities = merged.get("entities") or {}
+    if isinstance(merged_entities, list):
+        merged_entities = {
+            ent.get("tag", f"<ENT_{idx+1}>"): ent for idx, ent in enumerate(merged_entities)
+        }
+    merged["entities"] = merged_entities
+
+    merged.setdefault("reverse_map", {})
+    merged.setdefault("pseudonym_map", {})
+    merged.setdefault("pseudonym_reverse_map", {})
+    stats = merged.setdefault("stats", {"total": 0, "by_type": {}})
+    stats["total"] = stats.get("total", 0)
+    stats.setdefault("by_type", {})
+
+    label_counters: Dict[str, int] = {}
+    tag_re = re.compile(r"<\s*([A-Za-z]+)\s*_(\d+)\s*>")
+    for tag, info in merged_entities.items():
+        label = (info.get("label") or info.get("type") or "ENT").upper()
+        match = tag_re.match(str(tag))
+        idx = int(match.group(2)) if match else 0
+        label_counters[label] = max(label_counters.get(label, 0), idx)
+
+    extra_entities = extra.get("entities") or {}
+    if isinstance(extra_entities, list):
+        extra_items = []
+        for ent in extra_entities:
+            tag = ent.get("tag")
+            if not tag:
+                lbl = (ent.get("label") or ent.get("type") or "ENT").upper()
+                label_counters[lbl] = label_counters.get(lbl, 0) + 1
+                tag = f"<{lbl}_{label_counters[lbl]}>"
+            extra_items.append((tag, ent))
+    else:
+        extra_items = list(extra_entities.items())
+
+    for raw_tag, info in extra_items:
+        label = (info.get("label") or info.get("type") or "ENT").upper()
+        tag = str(raw_tag)
+        if tag in merged_entities:
+            label_counters[label] = label_counters.get(label, 0) + 1
+            tag = f"<{label}_{label_counters[label]}>"
+
+        info_copy = copy.deepcopy(info)
+        info_copy.setdefault("label", label)
+        merged_entities[tag] = info_copy
+
+        canonical = info_copy.get("canonical") or (info_copy.get("values") or [None])[0]
+        pseudonym = info_copy.get("pseudonym")
+        if canonical:
+            merged["reverse_map"].setdefault(tag, canonical)
+        if pseudonym:
+            merged["pseudonym_map"].setdefault(tag, pseudonym)
+            merged["pseudonym_reverse_map"].setdefault(pseudonym, canonical or pseudonym)
+
+        stats["total"] += 1
+        stats["by_type"][label] = stats["by_type"].get(label, 0) + 1
+
+    merged["entities"] = merged_entities
+    return merged
 
 
 def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
@@ -256,7 +328,11 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     )
     monitor.log("after-whisper-load")
     asr_segments = transcribe_segments(
-        model, wav_path, diar_segments, language=cfg.language
+        model,
+        wav_path,
+        diar_segments,
+        language=cfg.language,
+        initial_prompt=cfg.asr_prompt,
     )
     monitor.log("after-transcription")
 
@@ -354,6 +430,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     out_txt_anon_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_anon_clean.txt"
     out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_clean.txt"
     out_mapping_json = root_dir / cfg.out_dir / "json" / f"{txt_stem}_anon_mapping.json"
+    speaker_context_hint = (cfg.speaker_context or "").strip() or None
+    speaker_context_anon: Optional[str] = None
 
     report_outputs: Dict[str, Optional[str]] = {
         "report_anonymized_txt": None,
@@ -393,6 +471,11 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         )
         anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
 
+        if speaker_context_hint:
+            context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
+            mapping = _merge_anonymization_mappings(mapping, context_mapping)
+            speaker_context_anon = context_anonymized
+
         corrected_text = mapping.get("corrected_text")
         if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
             base_text = corrected_text
@@ -421,6 +504,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         out_txt_anon_clean.write_text(base_text, encoding="utf-8")
         out_mapping_json.write_text("{}", encoding="utf-8")
         out_txt_clean.write_text(base_text, encoding="utf-8")
+        if speaker_context_hint:
+            speaker_context_anon = speaker_context_hint
 
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts
@@ -433,6 +518,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             mapping_json_path=out_mapping_json,
             prompts_json_path=prompts_path,
             prompt_key=cfg.meeting_report_prompt_key,
+            speaker_context=speaker_context_anon,
         )
 
     torch.cuda.empty_cache()

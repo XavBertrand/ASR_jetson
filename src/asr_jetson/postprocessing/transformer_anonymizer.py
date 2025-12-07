@@ -301,7 +301,10 @@ class TransformerAnonymizer:
         }
         self.generic_blocklist = self.person_blocklist | {
             "sms", "whatsapp", "mail", "mails", "email", "emails", "tennis", "lundi", "mardi",
-            "mercredi", "jeudi", "vendredi", "samedi", "dimanche"
+            "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+            "client", "clients", "organisation", "organisations", "entreprise", "entreprises",
+            "avocat", "avocats", "cabinet", "ligne", "telephone", "téléphone", "compte",
+            "entrepreneur", "entrepreneuriat", "contact", "contacts"
         }
 
     def analyze(self, text: str) -> List[Dict[str, Any]]:
@@ -650,12 +653,14 @@ class TransformerAnonymizer:
 
             ent_copy = ent.copy()
             tokens_lower = {tok.lower() for tok in re.split(r"[\s,\.;:!\?\-\(\)]+", surface) if tok}
-            if etype_norm == "PERSON" and (
-                surface_lower in self.person_blocklist or tokens_lower & self.person_blocklist
-            ):
-                continue
-            if tokens_lower & self.generic_blocklist:
-                continue
+            is_domain_value = surface_lower in self._domain_values
+            if not is_domain_value:
+                if etype_norm == "PERSON" and (
+                    surface_lower in self.person_blocklist or tokens_lower & self.person_blocklist
+                ):
+                    continue
+                if tokens_lower & self.generic_blocklist:
+                    continue
             domain_label = self._domain_lookup.get(surface.lower())
             if domain_label and not common_usage:
                 ent_copy["entity_type"] = domain_label

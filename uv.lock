@@ -168,6 +168,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.104.0" },
     { name = "faster-whisper" },
     { name = "flashtext", specifier = ">=2.7" },
+    { name = "gliner", specifier = ">=0.2.7" },
     { name = "gliner", specifier = ">=0.2.22" },
     { name = "huggingface-hub", specifier = ">=0.25,<1.0" },
     { name = "language-tool-python", specifier = ">=2.9.4" },
