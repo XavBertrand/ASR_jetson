@@ -175,6 +175,26 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
     assert "\n|\n" not in markdown  # pas de lignes '|' orphelines
 
 
+def test_normalize_markdown_tables_strips_leading_bullets():
+    raw_md = (
+        "### 2. PARTICIPANTS\n"
+        "- | Pseudonyme | Désignation | Catégorie | Indices contextuels | Genre |\n"
+        "- | --- | --- | --- | --- | --- |\n"
+        "- | Alice | Alice | Client | Contexte précis | Féminin |\n\n"
+        "### 8. CHIFFRES ET REPÈRES TEMPORELS\n"
+        "- | Repère | Détail |\n"
+        "- | --- | --- |\n"
+        "- | 12/11 | Échéance annoncée |\n"
+    )
+
+    normalized = meeting_report_mod._normalize_markdown_tables(raw_md)
+    assert "- | Pseudonyme" not in normalized
+    assert "- | Repère" not in normalized
+    assert "| Pseudonyme | Désignation" in normalized
+    assert "| Repère | Détail |" in normalized
+    assert "| --- | --- |" in normalized
+
+
 @pytest.mark.skipif(_SKIP_INTEGRATION, reason=_SKIP_REASON)
 def test_transcription_to_docx_meeting_report(tmp_path: Path):
     transcription_path = _get_transcription_path()
