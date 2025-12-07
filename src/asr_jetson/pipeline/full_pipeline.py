@@ -148,6 +148,7 @@ class PipelineConfig:
     meeting_report_prompt_key: str = "meeting_analysis"
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
+    asr_prompt: Optional[str] = None
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -327,7 +328,11 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     )
     monitor.log("after-whisper-load")
     asr_segments = transcribe_segments(
-        model, wav_path, diar_segments, language=cfg.language
+        model,
+        wav_path,
+        diar_segments,
+        language=cfg.language,
+        initial_prompt=cfg.asr_prompt,
     )
     monitor.log("after-transcription")
 
