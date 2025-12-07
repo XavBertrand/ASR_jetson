@@ -276,12 +276,12 @@ def test_generate_meeting_report_end_to_end_no_network(
 
     # Les sections ### sont bien présentes (utile pour le formatage docx)
     for section in [
-        "### RÉSUMÉ EXÉCUTIF",
-        "### PARTICIPANTS",
-        "### SUJETS ABORDÉS",
-        "### DÉCISIONS",
-        "### ACTIONS",
-        "### PROCHAINES ÉTAPES",
+        "### 1. RÉSUMÉ EXÉCUTIF",
+        "### 2. PARTICIPANTS",
+        "### 3. SUJETS ABORDÉS",
+        "### 4. DÉCISIONS",
+        "### 5. ACTIONS",
+        "### 6. PROCHAINES ÉTAPES",
     ]:
         assert section in deanon_text
 
