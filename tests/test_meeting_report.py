@@ -38,7 +38,7 @@ _MINIMAL_PDF_BYTES = (
 @pytest.fixture
 def fake_pandoc_conversion(monkeypatch):
     """
-    Remplace la conversion pypandoc par un rendu local minimal pour les tests.
+    Remplace la conversion pypandoc (docx) par un rendu local minimal pour les tests.
     """
 
     def _fake_convert(markdown_text: str, to: str, out_path):
@@ -47,6 +47,9 @@ def fake_pandoc_conversion(monkeypatch):
         if to == "docx":
             doc = Document()
             for line in markdown_text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(":::") or stripped.startswith("<div"):
+                    continue
                 if line.startswith("### "):
                     doc.add_heading(line[4:].strip(), level=2)
                 elif line.strip():
@@ -61,6 +64,21 @@ def fake_pandoc_conversion(monkeypatch):
 
     monkeypatch.setattr(meeting_report_mod, "_convert_markdown_with_pandoc", _fake_convert)
     return _fake_convert
+
+
+@pytest.fixture
+def fake_pdf_renderer(monkeypatch):
+    """
+    Remplace l'export PDF via WeasyPrint par un PDF minimal.
+    """
+
+    def _fake_pdf(markdown_text: str, out_path, title: str | None = None):
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_MINIMAL_PDF_BYTES)
+
+    monkeypatch.setattr(meeting_report_mod, "_render_pdf_report", _fake_pdf)
+    return _fake_pdf
 
 
 @pytest.fixture
@@ -158,7 +176,7 @@ def _fake_llm_output():
 
 
 def test_generate_meeting_report_end_to_end_no_network(
-    temp_project, monkeypatch, fake_pandoc_conversion
+    temp_project, monkeypatch, fake_pandoc_conversion, fake_pdf_renderer
 ):
     """
     Test end-to-end du rapport :

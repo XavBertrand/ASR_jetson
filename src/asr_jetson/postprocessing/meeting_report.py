@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from datetime import datetime
 import unicodedata
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -22,10 +23,26 @@ except Exception as _err:  # pragma: no cover - executed when pypandoc missing
     _HAS_PYPANDOC = False
     _PYPANDOC_IMPORT_ERROR = _err
 
+try:  # pragma: no cover - optional dependency
+    from weasyprint import CSS, HTML  # type: ignore
+
+    _HAS_WEASYPRINT = True
+    _WEASYPRINT_IMPORT_ERROR: Optional[Exception] = None
+except Exception as _err:  # pragma: no cover - executed when weasyprint missing
+    CSS = None  # type: ignore
+    HTML = None  # type: ignore
+    _HAS_WEASYPRINT = False
+    _WEASYPRINT_IMPORT_ERROR = _err
+
 _TAG_NORM_RE = re.compile(r"<\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^>]*>|\{\s*([a-zA-Z]+)\s*_(\s*\d+)\s*[^}]*\}", re.UNICODE)
 _PERSON_TAG_RE = re.compile(r"<\s*PERSON\s*_(\s*\d+)\s*>", re.IGNORECASE)
-_PANDOC_MD_FORMAT = "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html"
+_PANDOC_MD_FORMAT = (
+    "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html+fenced_divs"
+    "-yaml_metadata_block"
+)
 _PREFERRED_SANS_FONTS: Tuple[str, ...] = ("Arial", "Calibri", "Liberation Sans", "DejaVu Sans")
+_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "config" / "meeting.html"
+_REPORT_CSS_PATH = Path(__file__).resolve().parent.parent / "config" / "report.css"
 _ROLE_KEYWORD_HINTS = {
     "delphine": "Avocat gérante",
     "marie": "Avocat gérante",
@@ -155,6 +172,21 @@ def _build_pseudonym_hint(mapping: Dict[str, Any]) -> str:
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _build_speakers_hint(speaker_labels: Set[str]) -> str:
+    """
+    Liste les locuteurs réellement détectés (SPEAKER_1, SPK2, etc.) pour forcer
+    le LLM à ne lister que ces personnes dans la section PARTICIPANTS.
+    """
+    if not speaker_labels:
+        return ""
+    ordered = sorted(speaker_labels)
+    listed = ", ".join(ordered)
+    return (
+        "Locuteurs détectés dans la transcription (uniquement ceux-ci doivent apparaître"
+        f" dans PARTICIPANTS) : {listed}.\nNe pas ajouter de personnes simplement citées.\n\n"
+    )
 
 
 def _format_speaker_context(context: Optional[str]) -> str:
@@ -365,6 +397,19 @@ def _count_person_tags(text: str) -> Dict[str, int]:
     return counts
 
 
+def _extract_speaker_labels(text: str) -> Set[str]:
+    labels: Set[str] = set()
+    for pattern in (
+        r"\bSPEAKER[_\-\s]?(\d+)\b",
+        r"\bSPK[_\-\s]?(\d+)\b",
+        r"\bLOCUTEUR[_\-\s]?(\d+)\b",
+    ):
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            idx = match.group(1).lstrip("0") or match.group(1)
+            labels.add(f"speaker_{idx.lower()}")
+    return labels
+
+
 def _canonical_entities_by_label(mapping: Dict[str, Any]) -> Dict[str, List[str]]:
     grouped: Dict[str, List[str]] = {}
     entities = mapping.get("entities")
@@ -420,6 +465,45 @@ def _select_relevant_person_tags(
     if not relevant:
         relevant.update(tag for tag, _ in sorted_counts[:max_tags])
     return relevant
+
+
+def _select_speaker_tags(
+    mapping: Dict[str, Any],
+    counts: Dict[str, int],
+    max_speakers: Optional[int] = None,
+) -> Set[str]:
+    """
+    Sélectionne un sous-ensemble de tags PERSON supposés correspondre aux locuteurs
+    réellement présents. Utilise la fréquence des tags dans la transcription puis
+    un éventuel fallback sur le mapping.
+    """
+    if max_speakers is not None and max_speakers <= 0:
+        return set()
+
+    sorted_counts = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+    selected: List[str] = []
+    max_allowed = max_speakers or 3
+
+    for tag_key, _ in sorted_counts:
+        normalized = _normalize_tag_key(tag_key)
+        if not normalized:
+            continue
+        if normalized not in selected:
+            selected.append(normalized)
+        if len(selected) >= max_allowed:
+            break
+
+    if len(selected) < max_allowed:
+        reverse_map = mapping.get("reverse_map", {})
+        if isinstance(reverse_map, dict):
+            for raw_tag in reverse_map.keys():
+                normalized = _normalize_tag_key(raw_tag)
+                if normalized and normalized not in selected:
+                    selected.append(normalized)
+                if len(selected) >= max_allowed:
+                    break
+
+    return set(selected)
 
 
 def _rationalize_person_tags(text: str, mapping: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
@@ -637,23 +721,29 @@ def _format_table_block(block: List[str]) -> List[str]:
     max_cols = 0
 
     for idx, raw_line in enumerate(block):
-        trimmed = raw_line.strip().strip("|")
-        if not trimmed:
+        trimmed = raw_line.strip()
+        if not trimmed or "|" not in trimmed:
             continue
-        cells = [cell.strip() for cell in trimmed.split("|")]
-        while cells and not cells[-1]:
-            cells.pop()
+        parts = [cell.strip() for cell in trimmed.split("|")]
+        # retire les bordures vides dues aux pipes d'ouverture/fermeture mais
+        # conserve les cellules vides internes (``||``) qui représentent une colonne vide
+        if parts and parts[0] == "":
+            parts = parts[1:]
+        if parts and parts[-1] == "":
+            parts = parts[:-1]
+
+        cells = parts
+
         if idx == 0:
-            while cells and all(ch in "-–—" for ch in cells[-1].replace(" ", "")):
-                cells.pop()
+            # en-tête : ignore les lignes d'underline accidentelles dans la dernière cellule uniquement
+            if cells and all(ch in "-–—" for ch in cells[-1].replace(" ", "")):
+                cells = cells[:-1]
         else:
-            if all(
-                not cell or all(ch in "-–—" for ch in cell.replace(" ", ""))
-                for cell in cells
-            ):
+            # saute les lignes composées uniquement de tirets (séparateurs)
+            if all(not cell or all(ch in "-–—" for ch in cell.replace(" ", "")) for cell in cells):
                 continue
         if len(cells) <= 1:
-            return block
+            return block  # pas un tableau : on ne modifie rien
         rows.append(cells)
         max_cols = max(max_cols, len(cells))
 
@@ -718,14 +808,29 @@ def _normalize_markdown_tables(text: str) -> str:
     return "\n".join(normalized_lines)
 
 
+def _normalize_table_pipes(text: str) -> str:
+    """
+    Préserve les colonnes vides des tableaux Markdown : on évite d'écraser les
+    « || » (cellule vide) en dehors des tableaux.
+    """
+    normalized: List[str] = []
+    for raw in text.splitlines():
+        stripped = raw.lstrip()
+        candidate, _ = _strip_table_bullet_prefix(stripped)
+        if candidate.lstrip().startswith("|") and candidate.count("|") >= 2:
+            normalized.append(re.sub(r"\|\|", "| |", raw))
+        else:
+            normalized.append(raw)
+    return "\n".join(normalized)
+
+
 def _prune_participants_table(
     text: str,
     mapping: Dict[str, Any],
     roles: Dict[str, str],
+    speaker_tags: Optional[Set[str]] = None,
+    speaker_labels: Optional[Set[str]] = None,
 ) -> str:
-    if not roles:
-        return text
-
     lookup = _build_tag_lookup(mapping)
     pseudo_lookup: Dict[str, str] = {}
     pseudo_map = mapping.get("pseudonym_map", {})
@@ -743,18 +848,40 @@ def _prune_participants_table(
                 pseudo_lookup.setdefault(normalized_tag, pseudo.strip())
 
     allowed_keywords: Set[str] = set()
-    for tag_key, role in roles.items():
-        canonical = lookup.get(tag_key)
-        canonical_lower = canonical.lower() if canonical else ""
-        pseudo_lower = pseudo_lookup.get(tag_key, "").lower()
-        if "delphine" in role.lower() or "avocat" in role.lower():
-            allowed_keywords.add("delphine")
-        if canonical_lower:
-            allowed_keywords.add(canonical_lower)
-        if pseudo_lower:
-            allowed_keywords.add(pseudo_lower)
+    allowed_tags: Set[str] = set()
+    if speaker_tags:
+        allowed_tags.update(_normalize_tag_key(tag) for tag in speaker_tags if tag)
+    for tag_key in roles.keys():
+        if not tag_key:
+            continue
+        allowed_tags.add(_normalize_tag_key(tag_key))
+
+    if allowed_tags:
+        for tag_key in allowed_tags:
+            canonical = lookup.get(tag_key) or lookup.get(f"<{tag_key}>")
+            pseudo_val = pseudo_lookup.get(tag_key) or pseudo_lookup.get(f"<{tag_key}>")
+            if canonical:
+                allowed_keywords.add(canonical.lower())
+            if pseudo_val:
+                allowed_keywords.add(pseudo_val.lower())
+            allowed_keywords.add(tag_key.lower())
+            allowed_keywords.add(f"<{tag_key.lower()}>")
+    else:
+        # fallback : autorise tous les pseudonymes / canoniques connus
+        for value in list(pseudo_lookup.values()) + list(lookup.values()):
+            if value:
+                allowed_keywords.add(value.lower())
+
+    if speaker_labels:
+        for label in speaker_labels:
+            if label:
+                allowed_keywords.add(label.lower())
+
+    # Inclus toujours les pseudonymes et noms connus même si les rôles sont absents
     if not allowed_keywords:
-        return text
+        for value in list(pseudo_lookup.values()) + list(lookup.values()):
+            if value:
+                allowed_keywords.add(value.lower())
 
     lines = text.splitlines()
     new_lines: List[str] = []
@@ -776,6 +903,7 @@ def _prune_participants_table(
                 i += 1
 
             filtered_block: List[str] = []
+            data_rows: List[str] = []
             for idx, block_line in enumerate(table_block):
                 stripped = block_line.strip()
                 if not stripped.startswith("|"):
@@ -792,9 +920,22 @@ def _prune_participants_table(
                 if all(ch == "-" for cell in cells for ch in cell.replace(" ", "")):
                     filtered_block.append(block_line)
                     continue
+                data_rows.append(block_line)
                 row_text = " ".join(cells)
-                if any(keyword in row_text for keyword in allowed_keywords):
+                row_text_lower = row_text.lower()
+                if allowed_keywords and any(keyword in row_text_lower for keyword in allowed_keywords):
                     filtered_block.append(block_line)
+                elif not allowed_keywords:
+                    filtered_block.append(block_line)
+
+            if allowed_keywords:
+                kept_data = [row for row in filtered_block if row.strip().startswith("|")][2:]
+                if not kept_data and data_rows:
+                    max_rows = len(allowed_tags) if allowed_tags else 1
+                    fallback_rows = data_rows[:max_rows or 1]
+                    for row in fallback_rows:
+                        if row not in filtered_block:
+                            filtered_block.append(row)
             new_lines.extend(filtered_block)
             if i < len(lines) and not lines[i].strip().startswith("### "):
                 new_lines.append("")
@@ -1097,6 +1238,227 @@ def _normalize_risk_opp_headers(text: str) -> str:
     return "\n".join(normalized)
 
 
+def _split_numbered_items(block: str) -> List[str]:
+    pattern = re.compile(r"\d+[.)]\s+")
+    matches = list(pattern.finditer(block))
+    if not matches:
+        return []
+
+    items: List[str] = []
+    for idx, match in enumerate(matches):
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(block)
+        candidate = block[start:end].strip(" \n-:•")
+        if candidate:
+            items.append(candidate)
+    return items
+
+
+def _split_risk_opp_content(block: str) -> Tuple[List[str], List[str]]:
+    """
+    Sépare le contenu de la section Risques/Opportunités en deux listes.
+    Gère les formats linéaires «Risques : 1. ...» ou déjà en puces.
+    """
+    if not block:
+        return [], []
+
+    lower = block.lower()
+    pos_r = lower.find("risque")
+    pos_o = lower.find("opportun")
+
+    risks_raw = ""
+    opps_raw = ""
+    if pos_r != -1 and (pos_o == -1 or pos_r < pos_o):
+        risks_raw = block[pos_r : pos_o if pos_o != -1 else len(block)]
+        opps_raw = block[pos_o:] if pos_o != -1 else ""
+    elif pos_o != -1 and (pos_r == -1 or pos_o < pos_r):
+        opps_raw = block[pos_o : pos_r if pos_r != -1 else len(block)]
+        risks_raw = block[pos_r:] if pos_r != -1 else ""
+    else:
+        risks_raw = block
+
+    def _clean(text: str) -> List[str]:
+        cleaned = re.sub(r"(?i)^risques?\s*[:\-]\s*", "", text).strip()
+        cleaned = re.sub(r"(?i)^opportunités?\s*[:\-]\s*", "", cleaned).strip()
+        if not cleaned:
+            return []
+        bullet_lines = [
+            line.strip(" -•").strip()
+            for line in cleaned.splitlines()
+            if line.strip().startswith(("-", "•"))
+        ]
+        if bullet_lines:
+            return bullet_lines
+        numbered = _split_numbered_items(cleaned)
+        if numbered:
+            return numbered
+        sentences = [
+            sent.strip(" -•")
+            for sent in re.split(r"(?<=[.!?])\s+", cleaned)
+            if sent.strip()
+        ]
+        return sentences
+
+    return _clean(risks_raw), _clean(opps_raw)
+
+
+def _restructure_risk_opp_section(text: str) -> str:
+    """
+    Reformate la section Risques/Opportunités en listes distinctes pour éviter
+    les blocs collés sur une seule ligne.
+    """
+
+    def _repl(match: re.Match[str]) -> str:
+        header = match.group(1).strip() + "\n"
+        content = match.group(2)
+        tail = match.group(3)
+
+        risks, opps = _split_risk_opp_content(content)
+        section_lines: List[str] = [header.rstrip(), ""]
+        if risks:
+            section_lines.append("**Risques :**")
+            section_lines.extend(f"- {item}" for item in risks)
+            section_lines.append("")
+        if opps:
+            if section_lines and section_lines[-1].strip():
+                section_lines.append("")
+            section_lines.append("**Opportunités :**")
+            section_lines.extend(f"- {item}" for item in opps)
+            section_lines.append("")
+        if not risks and not opps:
+            section_lines.append(content.strip())
+            section_lines.append("")
+
+        rebuilt = "\n".join(section_lines).rstrip() + "\n"
+        if tail.startswith("\n###"):
+            return rebuilt + "\n" + tail.lstrip("\n")
+        return rebuilt + tail
+
+    pattern = re.compile(
+        r"(###\s*\d*[.)]?\s*ANALYSE[S]?\s+DES\s+RISQUES\s+ET\s+OPPORTUNIT[ÉE]S?\s*\n)(.*?)(\n###\s|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub(_repl, text)
+
+
+def _ensure_risk_opp_spacing(text: str) -> str:
+    """
+    Garantit une ligne vide entre le bloc Risques et le bloc Opportunités
+    sans réécrire le contenu fourni par le LLM.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    for idx, line in enumerate(lines):
+        out.append(line.rstrip())
+        if (
+            line.strip().lower().startswith("**risques")
+            and idx + 1 < len(lines)
+            and lines[idx + 1].strip()
+            and not lines[idx + 1].strip().startswith("**opportun")
+        ):
+            continue
+        if line.strip().lower().startswith("**risques") and idx + 1 < len(lines):
+            next_line = lines[idx + 1].strip().lower()
+            if next_line.startswith("**opportun"):
+                out.append("")
+    return "\n".join(out)
+
+
+def _strip_header_bullets(text: str) -> str:
+    """
+    Supprime les lignes composées uniquement d'un « - » juste avant un titre ###,
+    qui provoquent un artefact visuel dans le rendu Markdown/PDF.
+    """
+    lines = text.splitlines()
+    cleaned: List[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "-" and i + 1 < len(lines) and lines[i + 1].lstrip().startswith("###"):
+            i += 1
+            continue
+        cleaned.append(line)
+        i += 1
+    return "\n".join(cleaned)
+
+
+def _ensure_table_spacing(text: str) -> str:
+    """
+    Ajoute des lignes vides avant et après les blocs de tableaux Markdown
+    pour éviter les rendus cassés dans les exports pandoc/LaTeX.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    in_table = False
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        is_table_line = stripped.startswith("|")
+
+        if is_table_line:
+            if not in_table:
+                if out and out[-1].strip():
+                    out.append("")
+                in_table = True
+            out.append(line.rstrip())
+            continue
+
+        if in_table:
+            if stripped and out and out[-1].strip():
+                out.append("")
+            in_table = False
+
+        out.append(line.rstrip())
+
+    return "\n".join(out)
+
+
+def _restore_executive_summary_spacing(text: str) -> str:
+    """
+    Restaure des sauts de ligne lisibles dans le résumé exécutif en ajoutant
+    une ligne vide après le titre et entre paragraphes/listes clés.
+    """
+    pattern = re.compile(
+        r"(###\s*\d*[.)]?\s*RÉSUMÉ EXÉCUTIF\s*\n)(.*?)(\n###\s|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def _repl(match: re.Match[str]) -> str:
+        header = match.group(1).strip()
+        content = match.group(2).strip("\n")
+        tail = match.group(3)
+
+        lines = content.splitlines()
+        restored: List[str] = []
+        last_nonempty = False
+        for line in lines:
+            stripped = line.strip()
+            starts_list = stripped.startswith("- ")
+            is_subheading = stripped.lower().startswith(
+                (
+                    "les enjeux majeurs",
+                    "décisions clés",
+                    "risques identifiés",
+                    "prochaines étapes",
+                )
+            )
+            if restored and stripped and (starts_list or is_subheading or last_nonempty):
+                if restored[-1].strip():
+                    restored.append("")
+            restored.append(line.rstrip())
+            last_nonempty = bool(stripped)
+
+        block = "\n".join(restored).strip()
+        rebuilt = f"{header}\n\n{block}\n"
+        if tail.startswith("\n###"):
+            rebuilt += "\n" + tail.lstrip("\n")
+        else:
+            rebuilt += tail
+        return rebuilt
+
+    return pattern.sub(_repl, text)
+
+
 def _normalize_points_sections(text: str) -> str:
     """
     Harmonise les listes des sections POINTS POSITIFS / POINTS DE FRICTION :
@@ -1130,6 +1492,183 @@ def _normalize_points_sections(text: str) -> str:
         result.append(line)
 
     return "\n".join(result)
+
+
+def _normalize_actions_section(text: str) -> str:
+    """
+    Nettoie la section ACTIONS pour éviter les puces parasites avant le tableau
+    (ex. « - À MENER ») qui cassent le rendu Markdown/PDF.
+    """
+    section_pattern = re.compile(
+        r"(###\s*\d*[.)]?\s*ACTIONS[^\n]*\n)(.*?)(\n###\s|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def _repl(match: re.Match[str]) -> str:
+        header = match.group(1).strip()
+        content = match.group(2)
+        tail = match.group(3)
+
+        cleaned_lines: List[str] = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            # supprime les puces « - À MENER ... » (même si suivi de texte) qui cassent le tableau
+            if re.match(r"^[-*]\s*[àa]?\s*mener\b", stripped, flags=re.IGNORECASE):
+                continue
+            cleaned_lines.append(line.rstrip())
+
+        # assure une ligne blanche avant un tableau pour éviter un rendu imbriqué
+        if cleaned_lines and cleaned_lines[0].strip().startswith("|"):
+            cleaned_lines.insert(0, "")
+
+        block = "\n".join([header, *cleaned_lines]).rstrip()
+        if tail.startswith("\n###"):
+            block += "\n" + tail.lstrip("\n")
+        return block
+
+    return section_pattern.sub(_repl, text)
+
+
+def _format_decisions_as_bullets(text: str) -> str:
+    """
+    Convertit la section DÉCISIONS en liste à puces avec sous-points indentés
+    (Décision / Contexte / Intervenants / Citation) pour faciliter la lecture.
+    Supprime la numérotation éventuelle laissée par le LLM.
+    """
+    section_pattern = re.compile(
+        r"(###\s*\d*[.)]?\s*DÉCISIONS\s*\n)(.*?)(\n###\s|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    field_patterns = {
+        "decision": re.compile(r"^d[ée]cision\s*:?\s*(.*)", flags=re.IGNORECASE),
+        "contexte": re.compile(r"^contexte\s*:?\s*(.*)", flags=re.IGNORECASE),
+        "intervenants": re.compile(r"^intervenants?\s*:?\s*(.*)", flags=re.IGNORECASE),
+        "citation": re.compile(r"^citation\s*:?\s*(.*)", flags=re.IGNORECASE),
+    }
+
+    def _clean(line: str) -> str:
+        cleaned = line.strip()
+        cleaned = re.sub(r"^(?:[-*]\s+|\d+[.)]\s+)", "", cleaned)
+        return cleaned.strip(" -–—")
+
+    def _format_item(raw_lines: List[str]) -> List[str]:
+        if not raw_lines:
+            return []
+
+        header = _clean(raw_lines[0])
+        fields: Dict[str, List[str]] = {k: [] for k in field_patterns.keys()}
+        extras: List[str] = []
+
+        for raw in raw_lines[1:]:
+            cleaned = _clean(raw)
+            if not cleaned:
+                continue
+            matched = False
+            for key, pattern in field_patterns.items():
+                match = pattern.match(cleaned)
+                if match:
+                    value = (match.group(1) or "").strip(" :-")
+                    if value:
+                        fields[key].append(value)
+                    matched = True
+                    break
+            if not matched:
+                extras.append(cleaned)
+
+        if header:
+            if not fields["decision"]:
+                fields["decision"].append(header)
+            elif header not in fields["decision"]:
+                fields["decision"].insert(0, header)
+
+        if extras and not fields["contexte"]:
+            fields["contexte"].append(" ".join(extras))
+
+        def _val(key: str, fallback: Optional[str] = None) -> str:
+            joined = " ".join(fields[key]).strip()
+            if joined:
+                return joined
+            if fallback:
+                return fallback
+            return "Non précisé"
+
+        decision_title = header or "Décision"
+        decision_text = _val("decision", decision_title)
+        context_text = _val("contexte", decision_title if extras else None)
+        intervenants_text = _val("intervenants")
+        citation_text = _val("citation")
+
+        return [
+            f"- {decision_title}",
+            f"  - Décision : {decision_text}",
+            f"  - Contexte : {context_text}",
+            f"  - Intervenants : {intervenants_text}",
+            f"  - Citation : {citation_text}",
+        ]
+
+    def _extract_items(block: str) -> List[List[str]]:
+        items: List[List[str]] = []
+        current: List[str] = []
+
+        def _is_field_line(raw: str) -> bool:
+            normalized = re.sub(r"^(?:[-*]\s+|\d+[.)]\s+)", "", raw).strip()
+            return bool(
+                re.match(
+                    r"(?i)^(d[ée]cision|contexte|intervenants?|citation)\b",
+                    normalized,
+                )
+            )
+
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                if current:
+                    current.append("")
+                continue
+
+            is_field = _is_field_line(stripped)
+            is_bullet = bool(re.match(r"^(?:[-*]|\d+[.)])\s+", stripped))
+
+            if is_bullet and is_field:
+                # Conserve ces lignes comme sous-éléments de l'item courant
+                if not current:
+                    current = [stripped]
+                else:
+                    current.append(stripped)
+                continue
+
+            if is_bullet:
+                if current:
+                    items.append(current)
+                current = [stripped]
+            else:
+                current.append(stripped)
+
+        if current:
+            items.append(current)
+        return items
+
+    def _repl(match: re.Match[str]) -> str:
+        header = match.group(1).strip()
+        content = match.group(2)
+        tail = match.group(3)
+
+        items = _extract_items(content)
+        if not items:
+            return match.group(0)
+
+        formatted: List[str] = [header, ""]
+        for idx, item in enumerate(items):
+            formatted.extend(_format_item(item))
+            if idx < len(items) - 1:
+                formatted.append("")
+
+        block = "\n".join(line.rstrip() for line in formatted if line is not None).rstrip()
+        if tail.startswith("\n###"):
+            block += "\n" + tail.lstrip("\n")
+        return block
+
+    return section_pattern.sub(_repl, text)
 
 
 def _indent_numbered_children(text: str) -> str:
@@ -1199,6 +1738,72 @@ def _strip_trailing_markers(text: str) -> str:
     return re.sub(r"\s*--\s*$", "", text, flags=re.MULTILINE)
 
 
+def _compact_numbered_lists(text: str) -> str:
+    """
+    Supprime les lignes vides au milieu d'une liste numérotée pour éviter que
+    pandoc ne crée plusieurs listes séparées (et donc reparties à 1).
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    in_numbered = False
+
+    for raw in lines:
+        stripped = raw.strip()
+        is_numbered = bool(re.match(r"^\d+[.)]\s", stripped))
+        if not stripped and in_numbered:
+            # on saute les lignes vides entre deux items
+            continue
+        out.append(raw.rstrip())
+        in_numbered = is_numbered
+        if not stripped:
+            in_numbered = False
+
+    return "\n".join(out)
+
+
+def _renumber_markdown_lists(text: str) -> str:
+    """
+    Renumérote proprement les listes numérotées Markdown pour éviter le
+    ``1.`` répété sur chaque ligne après les réécritures.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    stack: List[Tuple[str, int]] = []
+
+    def _reset():
+        stack.clear()
+
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        if "|" in line or stripped.startswith("#"):
+            _reset()
+            out.append(line)
+            continue
+
+        match = re.match(r"^(\s*)(\d+)[.)]\s+(.*)", line)
+        if match:
+            indent = match.group(1)
+            content = match.group(3)
+
+            # Ajuste la pile en fonction de l'indentation
+            while stack and len(stack[-1][0]) > len(indent):
+                stack.pop()
+            if stack and stack[-1][0] == indent:
+                stack[-1] = (indent, stack[-1][1] + 1)
+            else:
+                stack.append((indent, 1))
+
+            out.append(f"{indent}{stack[-1][1]}. {content}")
+            continue
+
+        if not stripped or stripped.startswith(("-", "*")):
+            _reset()
+        out.append(line)
+
+    return "\n".join(out)
+
+
 def _fix_inline_section_tables(text: str) -> str:
     """
     Extrait les en-têtes de section écrites à l'intérieur d'une ligne de tableau
@@ -1228,6 +1833,122 @@ def _fix_inline_section_tables(text: str) -> str:
             fixed.append(line)
 
     return "\n".join(fixed)
+
+
+def _structure_executive_summary_content(block: str) -> str:
+    """
+    Rend le résumé exécutif plus lisible : si le bloc ne contient pas déjà de
+    puces ou de tableaux, produit un paragraphe rédigé suivi éventuellement
+    d'une courte liste de points clés.
+    """
+    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    has_list = any(
+        line.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.")) or "|" in line
+        for line in lines
+    )
+    if has_list:
+        return "\n".join(lines) + "\n"
+
+    sentence_split = re.split(r"(?<=[.!?])\s+(?=[A-ZÉÈÀÂÎÔÙÇ])", " ".join(lines))
+    sentences = [sent.strip(" \n-") for sent in sentence_split if sent.strip()]
+    if len(sentences) <= 1:
+        return "\n\n".join(lines) + "\n"
+
+    lead_count = 2 if len(sentences) > 3 else len(sentences)
+    lead_paragraph = " ".join(sentences[:lead_count])
+    tail = sentences[lead_count:]
+
+    assembled: List[str] = [lead_paragraph]
+    if tail:
+        assembled.append("")
+        assembled.append("Points clés :")
+        assembled.extend(f"- {sent}" for sent in tail)
+
+    return "\n".join(assembled).rstrip() + "\n"
+
+
+def _format_executive_summary(text: str) -> str:
+    """
+    Structure le résumé exécutif pour favoriser un rendu aéré (liste de points).
+    """
+
+    def _repl(match: re.Match[str]) -> str:
+        header = match.group(1).strip() + "\n"
+        content = match.group(2)
+        formatted = _structure_executive_summary_content(content)
+        tail = match.group(3)
+        if tail.startswith("\n###"):
+            tail = tail[1:]
+        return header + formatted + tail
+
+    pattern = re.compile(
+        r"(###\s*\d*[.)]?\s*RÉSUMÉ EXÉCUTIF\s*\n)(.*?)(\n###\s|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub(_repl, text)
+
+
+def _slugify_title(title: str) -> str:
+    normalized = _normalize_title_key(title)
+    slug = re.sub(r"[^A-Z0-9]+", "-", normalized).strip("-").lower()
+    return slug or "section"
+
+
+def _wrap_sections_with_cards(text: str) -> str:
+    """
+    Encapsule chaque section (### ...) dans un bloc stylable (fenced div).
+    """
+    lines = text.splitlines()
+    wrapped: List[str] = []
+    open_block = False
+
+    def _close_block() -> None:
+        nonlocal open_block
+        if open_block:
+            wrapped.append(":::")
+            wrapped.append("")
+            open_block = False
+
+    for line in lines:
+        if line.strip().startswith("###"):
+            _close_block()
+            header = re.sub(r"^#+\s*", "", line).strip()
+            header = re.sub(r"^\d+[.)]\s*", "", header)
+            slug = _slugify_title(header)
+            wrapped.append(f"::: section-card section-{slug}")
+            wrapped.append("")
+            open_block = True
+        wrapped.append(line.rstrip())
+
+    _close_block()
+    return "\n".join(wrapped).strip() + "\n"
+
+
+def _materialize_section_cards(markdown_text: str) -> str:
+    """
+    Convertit les blocs ::: section-card ... en balises <div> pour éviter
+    l'affichage brut des marqueurs lorsque les extensions Markdown ne sont
+    pas appliquées par le moteur (PDF/HTML).
+    """
+    lines = markdown_text.splitlines()
+    rendered: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(":::"):
+            parts = stripped.split()
+            classes = parts[1:]
+            if classes:
+                rendered.append(f'<div class="{" ".join(classes)}">')
+            else:
+                rendered.append("</div>")
+            continue
+        rendered.append(line)
+
+    return "\n".join(rendered)
 
 
 def _strip_speaker_placeholders(text: str) -> str:
@@ -1289,7 +2010,7 @@ def _convert_markdown_with_pandoc(markdown_text: str, to: str, out_path: Path) -
         ) from _PYPANDOC_IMPORT_ERROR
 
     extra_args = ["--standalone", "--wrap=none"]
-    format_spec = _PANDOC_MD_FORMAT
+    format_spec = "gfm" if to == "pdf" else _PANDOC_MD_FORMAT
 
     if to == "pdf":
         pdf_engine = os.getenv("PYPANDOC_PDF_ENGINE") or "xelatex"
@@ -1345,6 +2066,54 @@ def _convert_markdown_with_pandoc(markdown_text: str, to: str, out_path: Path) -
         extra_args=extra_args,
     )
 
+
+def _get_report_assets() -> Tuple[Path, Path]:
+    """
+    Return the HTML template and CSS paths for the meeting report.
+    """
+    if not _REPORT_TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"Meeting report template missing: {_REPORT_TEMPLATE_PATH}")
+    if not _REPORT_CSS_PATH.exists():
+        raise FileNotFoundError(f"Meeting report CSS missing: {_REPORT_CSS_PATH}")
+    return _REPORT_TEMPLATE_PATH, _REPORT_CSS_PATH
+
+
+def _build_html_report(markdown_text: str, *, title: Optional[str] = None) -> str:
+    if not _HAS_PYPANDOC:
+        raise RuntimeError(
+            "pypandoc is required to render HTML reports"
+        ) from _PYPANDOC_IMPORT_ERROR
+
+    template_path, _ = _get_report_assets()
+    extra_args = ["--standalone", "--template", str(template_path)]
+    today = datetime.now().strftime("%d/%m/%Y")
+    extra_args.extend(["--metadata", f"date={today}"])
+    if title:
+        extra_args.extend(["--metadata", f"title={title}"])
+
+    return pypandoc.convert_text(  # type: ignore[call-arg]
+        markdown_text,
+        to="html",
+        format=_PANDOC_MD_FORMAT,
+        extra_args=extra_args,
+    )
+
+
+def _render_pdf_report(markdown_text: str, out_path: Path, *, title: Optional[str] = None) -> None:
+    if not _HAS_WEASYPRINT:
+        raise RuntimeError(
+            "weasyprint is required to export meeting reports to PDF"
+        ) from _WEASYPRINT_IMPORT_ERROR
+
+    template_path, css_path = _get_report_assets()
+    html_report = _build_html_report(markdown_text, title=title)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    HTML(string=html_report, base_url=str(template_path.parent)).write_pdf(
+        target=str(out_path),
+        stylesheets=[CSS(filename=str(css_path))],
+    )
+
+
 def generate_meeting_report(
     anonymized_txt_path: Path,
     mapping_json_path: Path,
@@ -1358,7 +2127,7 @@ def generate_meeting_report(
     1) Lit la transcription anonymisée (txt)
     2) Lance Mistral Large avec le prompt JSON (key configurable)
     3) Désanonymise le rapport LLM via mapping
-    4) Exporte TXT/Markdown et génère DOCX+PDF via pypandoc
+    4) Exporte TXT/Markdown, DOCX via pypandoc et PDF via template HTML/CSS (WeasyPrint)
 
     ``speaker_context`` doit déjà être anonymisé (pseudonymes) pour éviter toute fuite
     vers l'API ; il est injecté en préambule du prompt pour aider l'attribution des rôles.
@@ -1378,17 +2147,26 @@ def generate_meeting_report(
     mapping_raw = json.loads(Path(mapping_json_path).read_text(encoding="utf-8"))
     anon_text, mapping_raw = _rationalize_person_tags(anon_text, mapping_raw)
     person_counts = _count_person_tags(anon_text)
+    speaker_labels = _extract_speaker_labels(anon_text)
+    speaker_tags = _select_speaker_tags(
+        mapping_raw,
+        person_counts,
+        max_speakers=len(speaker_labels) if speaker_labels else 0,
+    )
     relevant_tags = _select_relevant_person_tags(mapping_raw, person_counts)
 
     # 2) Mistral Large
     pseudonym_hint = _build_pseudonym_hint(mapping_raw)
+    speakers_hint = _build_speakers_hint(speaker_labels)
     hint_block = f"{pseudonym_hint}\n" if pseudonym_hint else ""
+    speakers_block = f"{speakers_hint}" if speakers_hint else ""
     context_block = _format_speaker_context(speaker_context)
-    user_payload = prompt.user_prefix + hint_block + context_block + anon_text
+    user_payload = prompt.user_prefix + hint_block + speakers_block + context_block + anon_text
     analysis_anonymized = mistral_client.chat_complete(
         model=prompt.model,
         system=prompt.system,
         user_text=user_payload,
+        temperature=0.1,
     )
 
     analysis_anonymized = _normalize_llm_placeholders(analysis_anonymized)
@@ -1406,36 +2184,21 @@ def generate_meeting_report(
     analysis_deanonymized = _rewrite_roles(analysis_deanonymized, mapping, role_hints)
     analysis_deanonymized = _drop_unknown_tags(analysis_deanonymized, _collect_known_tags(mapping))
 
-    # — Nettoyage léger —
-    # normalise quelques séparateurs Markdown et petites incohérences de formatage
+    # Nettoyage léger en préservant le Markdown du LLM
     analysis_deanonymized = analysis_deanonymized.replace("\r\n", "\n")
-    # Ne supprime que les règles horizontales solitaires, pas les séparateurs de tables
-    analysis_deanonymized = re.sub(
-        r"(?m)^\s*---\s*$",
-        "\n\n",
-        analysis_deanonymized,
-    )
-    # tables à double "||" -> un seul "|"
-    analysis_deanonymized = analysis_deanonymized.replace("||", "|")
-    # retire un éventuel préambule avant la première section
-    analysis_deanonymized = _strip_preamble(analysis_deanonymized)
-    analysis_deanonymized = _strip_trailing_markers(analysis_deanonymized)
-    analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
-    analysis_deanonymized = _normalize_bullets_outside_tables(analysis_deanonymized)
-    analysis_deanonymized = _split_compound_bullets(analysis_deanonymized)
-    analysis_deanonymized = _normalize_inline_numbering(analysis_deanonymized)
-    analysis_deanonymized = _normalize_section_headers(analysis_deanonymized)
-    analysis_deanonymized = _number_main_sections(analysis_deanonymized)
-    analysis_deanonymized = _fix_inline_section_tables(analysis_deanonymized)
-    analysis_deanonymized = _drop_lonely_markers(analysis_deanonymized)
-    analysis_deanonymized = _normalize_risk_opp_headers(analysis_deanonymized)
-    analysis_deanonymized = _indent_numbered_children(analysis_deanonymized)
-    analysis_deanonymized = _normalize_points_sections(analysis_deanonymized)
-    analysis_deanonymized = _split_residual_inline_items(analysis_deanonymized)
+    analysis_deanonymized = _normalize_table_pipes(analysis_deanonymized)
+    analysis_deanonymized = _normalize_actions_section(analysis_deanonymized)
+    analysis_deanonymized = _ensure_table_spacing(analysis_deanonymized)
     # normalise les tableaux Markdown pour conserver l'alignement dans les exports
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # supprime les lignes parasites dans la table des participants
-    analysis_deanonymized = _prune_participants_table(analysis_deanonymized, mapping, role_hints)
+    analysis_deanonymized = _prune_participants_table(
+        analysis_deanonymized,
+        mapping,
+        role_hints,
+        speaker_tags=speaker_tags,
+        speaker_labels=speaker_labels,
+    )
     analysis_deanonymized = _normalize_markdown_tables(analysis_deanonymized)
     # convertit les puces unicode en puces Markdown standard
     analysis_deanonymized = re.sub(r"^[ \t]*[•∙]", "- ", analysis_deanonymized, flags=re.MULTILINE)
@@ -1462,12 +2225,15 @@ def generate_meeting_report(
     out_md = reports_dir / f"{base}_meeting_report.md"
     out_docx = docx_dir / f"{base}_meeting_report.docx"
     out_pdf = pdf_dir / f"{base}_meeting_report.pdf"
+    report_title = base.replace("_", " ").strip() or base
 
     out_txt_anon.write_text(analysis_anonymized, encoding="utf-8")
     out_txt.write_text(analysis_deanonymized, encoding="utf-8")
     out_md.write_text(analysis_deanonymized, encoding="utf-8")
-    _convert_markdown_with_pandoc(analysis_deanonymized, to="docx", out_path=out_docx)
-    _convert_markdown_with_pandoc(analysis_deanonymized, to="pdf", out_path=out_pdf)
+
+    styled_markdown = analysis_deanonymized
+    _convert_markdown_with_pandoc(styled_markdown, to="docx", out_path=out_docx)
+    _render_pdf_report(styled_markdown, out_pdf, title=report_title)
 
     return {
         "report_anonymized_txt": str(out_txt_anon),

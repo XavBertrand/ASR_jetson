@@ -27,6 +27,20 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - executed when pypandoc missing
     _HAS_PYPANDOC = False
 
+try:  # pragma: no cover - optional dependency
+    from weasyprint import HTML  # type: ignore  # noqa: F401
+
+    _HAS_WEASYPRINT = True
+except Exception:  # pragma: no cover - executed when weasyprint missing
+    _HAS_WEASYPRINT = False
+
+_MINIMAL_PDF_BYTES = (
+    b"%PDF-1.4\n"
+    b"1 0 obj<<>>\nendobj\n"
+    b"xref\n0 2\n0000000000 65535 f \n0000000009 00000 n \n"
+    b"trailer<< /Size 2 >>\nstartxref\n44\n%%EOF\n"
+)
+
 
 def _integration_prerequisites() -> list[str]:
     missing: list[str] = []
@@ -34,6 +48,8 @@ def _integration_prerequisites() -> list[str]:
         missing.append("MISTRAL_API_KEY")
     if not _HAS_PYPANDOC:
         missing.append("pypandoc")
+    if not _HAS_WEASYPRINT:
+        missing.append("weasyprint")
     return missing
 
 
@@ -86,7 +102,18 @@ def _read_docx_text(path: Path) -> str:
     return xml
 
 
-def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
+@pytest.fixture
+def fake_pdf_renderer(monkeypatch):
+    def _fake_pdf(markdown_text: str, out_path: Path, title: str | None = None) -> None:
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_MINIMAL_PDF_BYTES)
+
+    monkeypatch.setattr(meeting_report_mod, "_render_pdf_report", _fake_pdf)
+    return _fake_pdf
+
+
+def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch, fake_pdf_renderer):
     """
     Génère un rapport Markdown à partir de la transcription fixture sans dépendance
     réseau (LLM mocké) ni pypandoc.
@@ -138,7 +165,11 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
         "| Pseudonyme | Désignation | Catégorie | Indices contextuels | Genre |\n"
         "| --- | --- | --- | --- | --- |\n"
         "| <PERSON_1> | Collaborateur | Collaborateur | - Gère les dossiers clients | Féminin |\n"
-        "| <PERSON_2> | Avocat gérante | Avocat gérante | - Prend les décisions stratégiques | Féminin |\n"
+        "| <PERSON_2> | Avocat gérante | Avocat gérante | - Prend les décisions stratégiques | Féminin |\n\n"
+        "### ACTIONS\n"
+        "| Action | Responsable | Échéance | Commentaire |\n"
+        "| --- | --- | --- | --- |\n"
+        "| Relancer le client | <PERSON_1> | | À préciser |\n"
     )
 
     monkeypatch.setattr(meeting_report_mod, "_check_mistral_access", lambda timeout=5.0: (True, ""))
@@ -154,7 +185,12 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
         if to == "pdf":
             out.write_bytes(b"%PDF-1.4\\n1 0 obj<<>>\\nendobj\\ntrailer<< /Size 1 >>\\n%%EOF\\n")
         else:
-            out.write_text(f"{to} export stub\\n{markdown_text}", encoding="utf-8")
+            filtered = "\n".join(
+                line
+                for line in markdown_text.splitlines()
+                if not line.strip().startswith(":::") and not line.strip().startswith("<div")
+            )
+            out.write_text(f"{to} export stub\\n{filtered}", encoding="utf-8")
 
     monkeypatch.setattr(meeting_report_mod, "_convert_markdown_with_pandoc", _fake_convert)
 
@@ -173,6 +209,12 @@ def test_transcription_to_markdown_offline(tmp_path: Path, monkeypatch):
     assert "| Pseudonyme" in markdown
     assert "| --- | --- |" in markdown
     assert "\n|\n" not in markdown  # pas de lignes '|' orphelines
+    assert "\n|\n\n|" not in markdown, "Pas de ligne vide entre deux lignes de tableau"
+    action_rows = [line for line in markdown.splitlines() if "Relancer le client" in line]
+    assert action_rows, "La table ACTIONS doit être conservée"
+    action_cells = [cell.strip() for cell in action_rows[0].strip().strip("|").split("|")]
+    assert len(action_cells) == 4, "Les cellules vides ne doivent pas supprimer de colonne dans les tableaux"
+    assert action_cells[2] == "", "La colonne Échéance doit pouvoir rester vide"
 
 
 def test_normalize_markdown_tables_strips_leading_bullets():

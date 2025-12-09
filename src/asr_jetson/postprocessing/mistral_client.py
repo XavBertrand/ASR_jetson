@@ -19,7 +19,12 @@ def load_prompts(path: str, key: str = "meeting_analysis") -> MistralPrompt:
         cfg = json.load(f)[key]
     return MistralPrompt(model=cfg["model"], system=cfg["system"], user_prefix=cfg["user_prefix"])
 
-def chat_complete(model: str, system: str, user_text: str) -> str:
+def chat_complete(
+    model: str,
+    system: str,
+    user_text: str,
+    temperature: float | None = None,
+) -> str:
     api_key = os.environ.get("MISTRAL_API_KEY", "")
     if not api_key:
         raise RuntimeError("MISTRAL_API_KEY manquant dans l'environnement")
@@ -30,7 +35,10 @@ def chat_complete(model: str, system: str, user_text: str) -> str:
             {"role": "system", "content": system},
             {"role": "user", "content": user_text},
         ]
-        res = client.chat.complete(model=model, messages=messages, stream=False)
+        params: Dict[str, Any] = {"model": model, "messages": messages, "stream": False}
+        if temperature is not None:
+            params["temperature"] = temperature
+        res = client.chat.complete(**params)
         # Normalisation sortie (SDK varie légèrement selon versions)
         try:
             return res.output[0].content

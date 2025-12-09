@@ -1,0 +1,259 @@
+/* ------------ Mise en page générale pour PDF ------------ */
+
+@page {
+  margin: 2cm 2.2cm;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+               Arial, sans-serif;
+  font-size: 10pt;
+  line-height: 1.3;
+  color: #1f2a36;
+}
+
+/* ------------ En-tête & pied de page ------------ */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid #e0e0e0;
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.4rem;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+}
+
+.cabinet-name {
+  font-size: 10pt;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #777;
+}
+
+.report-title {
+  font-size: 16pt;
+  font-weight: 600;
+  margin-top: 0.15rem;
+}
+
+.header-right {
+  text-align: right;
+  font-size: 9pt;
+}
+
+.meta-label {
+  text-transform: uppercase;
+  font-weight: 600;
+  color: #777;
+}
+
+.meta-value {
+  margin-top: 0.2rem;
+}
+
+/* Pied de page – WeasyPrint utilise des variables de page, sinon tu peux ignorer */
+.page-footer {
+  position: running(footer);
+  display: flex;
+  justify-content: space-between;
+  font-size: 8.5pt;
+  color: #888;
+  border-top: 1px solid #e0e0e0;
+  padding-top: 0.4rem;
+  margin-top: 1.4rem;
+}
+
+/* Si tu utilises WeasyPrint, tu peux ajouter des footers automatiques via @page margin boxes */
+
+.content {
+  /* pour éviter que le contenu ne colle à l’en-tête/pied en PDF multi-pages */
+}
+
+/* ------------ Titres & structure ------------ */
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  color: #333;
+  page-break-after: avoid;
+}
+
+h1 {
+  font-size: 17pt;
+  margin-top: 0;
+  margin-bottom: 0.8rem;
+}
+
+h2 {
+  font-size: 14pt;
+  margin-top: 1.6rem;
+  margin-bottom: 0.6rem;
+}
+
+h3 {
+  font-size: 12pt;
+  margin-top: 1.4rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 0.2rem;
+}
+
+h4 {
+  font-size: 11pt;
+  margin-top: 1rem;
+  margin-bottom: 0.3rem;
+}
+
+p {
+  margin: 0 0 0.4rem 0;
+}
+
+/* Listes */
+
+ul, ol {
+  margin-top: 0.2rem;
+  margin-bottom: 0.4rem;
+  padding-left: 1.3rem;
+}
+
+li {
+  margin-bottom: 0.1rem;
+}
+
+/* ------------ Tableaux (participants, actions, etc.) ------------ */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6rem 0 1rem 0;
+  font-size: 10pt;
+  page-break-inside: auto;
+}
+
+thead {
+  background-color: #f6f7fb;
+  display: table-header-group;
+}
+
+th, td {
+  padding: 0.35rem 0.45rem;
+  border: 1px solid #e0e0e0;
+  vertical-align: top;
+}
+
+th {
+  text-align: left;
+  font-weight: 600;
+}
+
+tbody tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+tbody tr {
+  page-break-inside: avoid;
+}
+
+/* Force pandoc to render Markdown pipe tables cleanly */
+table thead tr th:last-child,
+table tbody tr td:last-child {
+  padding-right: 0.6rem;
+}
+
+table {
+  border-spacing: 0;
+}
+
+/* ------------ Blocs typiques pour ce type de rapport ------------ */
+
+strong {
+  font-weight: 600;
+}
+
+em {
+  font-style: italic;
+}
+
+/* citations / verbatim */
+blockquote {
+  margin: 0.4rem 0 0.6rem 0.8rem;
+  padding-left: 0.6rem;
+  border-left: 3px solid #e0e0e0;
+  color: #555;
+  font-size: 10pt;
+}
+
+/* ------------ Gestion des sauts de page ------------ */
+
+/* Autorise la pagination à l'intérieur des listes et citations pour éviter les pages blanches */
+blockquote, ul, ol {
+  page-break-inside: auto;
+}
+
+/* Chaque grande section (###) peut commencer de préférence en haut de page
+   Si c'est trop agressif tu peux commenter cette règle */
+h3 {
+  page-break-before: auto;
+}
+
+/* ------------ Détails divers ------------ */
+
+code {
+  font-family: "Fira Mono", "DejaVu Sans Mono", monospace;
+  font-size: 9pt;
+  background: #f5f5f5;
+  padding: 0.1rem 0.2rem;
+  border-radius: 3px;
+}
+
+a {
+  color: #1a73e8;
+  text-decoration: none;
+}
+
+/* ------------ Sections mises en carte ------------ */
+
+.section-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0.4rem 0 0.8rem;
+  margin: 0.2rem 0 0.6rem;
+  box-shadow: none;
+  border-bottom: 1px solid #eef0f5;
+}
+
+.section-card h3 {
+  margin-top: 0;
+}
+
+.section-card > ul,
+.section-card > ol,
+.section-card > p,
+.section-card > table,
+.section-card > blockquote {
+  margin-top: 0.3rem;
+}
+
+.section-resume-executif {
+  border: 0;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+.section-points-positifs,
+.section-points-de-friction,
+.section-decisions,
+.section-actions,
+.section-prochaines-etapes,
+.section-analyse-des-risques-et-opportunites {
+  border: 0;
+}
+
+a:hover {
+  text-decoration: underline;
+}
