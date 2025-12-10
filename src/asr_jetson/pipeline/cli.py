@@ -25,23 +25,9 @@ def main() -> None:
     p.add_argument("--out-dir", default="outputs", help="Output directory (json/srt/txt)")
     p.add_argument("--pyannote-pipeline", default="pyannote/speaker-diarization-3.1", help="Pyannote pipeline identifier to use for diarization")
     p.add_argument("--pyannote-token", default=None, help="Hugging Face token for private Pyannote pipelines (optional)")
-    p.add_argument(
-        "--monitor-gpu-memory",
-        action="store_true",
-        help="Print GPU memory usage at key stages of the pipeline",
-    )
-    p.add_argument(
-        "--asr-prompt",
-        type=str,
-        default="Kleos, Pennylane, CJD"
-,        help="Optional initial prompt sent to Faster-Whisper to bias decoding",
-    )
-    p.add_argument(
-        "--speaker-context",
-        type=str,
-        default=None,
-        help="Optional anonymized description of the speakers/roles to help the report (kept local)",
-    )
+    p.add_argument("--monitor-gpu-memory", action="store_true",help="Print GPU memory usage at key stages of the pipeline")
+    p.add_argument("--asr-prompt", type=str, default="Kleos, Pennylane, CJD", help="Optional initial prompt sent to Faster-Whisper to bias decoding")
+    p.add_argument("--speaker-context", type=str, default=None, help="Optional anonymized description of the speakers/roles to help the report (kept local)")
     args = p.parse_args()
 
     cfg = PipelineConfig(

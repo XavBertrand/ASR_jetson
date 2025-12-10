@@ -26,8 +26,9 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import load_catalog
-from asr_jetson.postprocessing.meeting_report import generate_meeting_report
+from asr_jetson.postprocessing.meeting_report import generate_pdf_report
 from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
+from asr_jetson.postprocessing import mistral_client
 
 
 # --- Helpers ---
@@ -513,13 +514,32 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             prompts_path = (root_dir / prompts_path).resolve()
         if not prompts_path.exists():
             raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-        report_outputs = generate_meeting_report(
-            anonymized_txt_path=out_txt_anon_clean,
-            mapping_json_path=out_mapping_json,
-            prompts_json_path=prompts_path,
-            prompt_key=cfg.meeting_report_prompt_key,
-            speaker_context=speaker_context_anon,
+
+        prompt = mistral_client.load_prompts(str(prompts_path), key=cfg.meeting_report_prompt_key)
+        anonymized_payload = out_txt_anon_clean.read_text(encoding="utf-8")
+        analysis_anonymized = mistral_client.chat_complete(
+            model=prompt.model,
+            system=prompt.system,
+            user_text=prompt.user_prefix + anonymized_payload,
+            temperature=0.1,
         )
+
+        reports_dir = root_dir / cfg.out_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_anon_path = reports_dir / f"{txt_stem}_meeting_report_anonymized.md"
+        report_anon_path.write_text(analysis_anonymized, encoding="utf-8")
+
+        report_outputs = generate_pdf_report(
+            anonymized_markdown_path=report_anon_path,
+            mapping_json_path=out_mapping_json,
+            output_dir=root_dir / cfg.out_dir,
+            run_id=txt_stem,
+            title=txt_stem.replace("_", " ").strip() or txt_stem,
+        )
+        # Preserve legacy keys expected by callers.
+        report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))
+        report_outputs.setdefault("report_txt", None)
+        report_outputs.setdefault("report_docx", None)
 
     torch.cuda.empty_cache()
     gc.collect()
