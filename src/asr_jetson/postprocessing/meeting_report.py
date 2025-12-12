@@ -34,6 +34,13 @@ _PANDOC_MD_FORMAT = (
 )
 _REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "config" / "meeting.html"
 _REPORT_CSS_PATH = Path(__file__).resolve().parent.parent / "config" / "report.css"
+DEFAULT_REPORT_TITLE = "Compte Rendu d'Entretien Collaborateur"
+PROMPT_TITLE_MAP: dict[str, str] = {
+    "entretien_collaborateur": "Compte Rendu d'Entretien Collaborateur",
+    "entretien_client_particulier_contentieux": "Compte Rendu d'Entretien Client",
+    "entretien_client_professionnel_conseil": "Compte Rendu d'Entretien Client",
+    "entretien_client_professionnel_contentieux": "Compte Rendu d'Entretien Client",
+}
 
 
 def pdf_export_prerequisites() -> list[str]:
@@ -142,6 +149,15 @@ def _render_pdf_report(markdown_text: str, out_path: Path, *, title: Optional[st
     )
 
 
+def resolve_default_report_title(prompt_key: Optional[str]) -> str:
+    """
+    Return a default report title based on the selected prompt category.
+    """
+    if prompt_key:
+        return PROMPT_TITLE_MAP.get(prompt_key, DEFAULT_REPORT_TITLE)
+    return DEFAULT_REPORT_TITLE
+
+
 def generate_pdf_report(
     anonymized_markdown_path: Path,
     mapping_json_path: Path,
@@ -149,9 +165,12 @@ def generate_pdf_report(
     *,
     run_id: Optional[str] = None,
     title: Optional[str] = None,
+    prompt_key: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Produce a deanonymized Markdown report and render it to PDF using the shared HTML/CSS assets.
+    Defaults the rendered title based on the prompt category (collaborateur vs client)
+    when none is provided.
     """
     anonymized_md = _load_markdown(Path(anonymized_markdown_path))
     mapping = _normalize_mapping(_load_mapping(Path(mapping_json_path)))
@@ -167,7 +186,7 @@ def generate_pdf_report(
     pdf_path = pdf_dir / f"{base}_meeting_report.pdf"
     md_path.write_text(deanonymized_md, encoding="utf-8")
 
-    report_title = title or base.replace("_", " ").strip() or base
+    report_title = title or resolve_default_report_title(prompt_key)
     _render_pdf_report(deanonymized_md, pdf_path, title=report_title)
 
     return {

@@ -146,7 +146,7 @@ class PipelineConfig:
     anon_max_block_sents: int = 5
     generate_meeting_report: bool = True
     meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
-    meeting_report_prompt_key: str = "meeting_analysis"
+    meeting_report_prompt_key: str = "entretien_collaborateur"
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
@@ -517,6 +517,11 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
 
         prompt = mistral_client.load_prompts(str(prompts_path), key=cfg.meeting_report_prompt_key)
         anonymized_payload = out_txt_anon_clean.read_text(encoding="utf-8")
+        if speaker_context_anon:
+            anonymized_payload = (
+                f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
+                + anonymized_payload
+            )
         analysis_anonymized = mistral_client.chat_complete(
             model=prompt.model,
             system=prompt.system,
@@ -534,7 +539,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             mapping_json_path=out_mapping_json,
             output_dir=root_dir / cfg.out_dir,
             run_id=txt_stem,
-            title=txt_stem.replace("_", " ").strip() or txt_stem,
+            prompt_key=cfg.meeting_report_prompt_key,
         )
         # Preserve legacy keys expected by callers.
         report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))
