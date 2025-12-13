@@ -125,15 +125,46 @@ def _ensure_language_tool() -> Optional[Any]:
 
 def _polish_markdown_with_languagetool(markdown_text: str) -> str:
     """
-    Apply LanguageTool corrections to the deanonymized report Markdown.
+    Apply LanguageTool corrections to the deanonymized report Markdown, restricted to
+    punctuation/spacing and casing changes to avoid altering names.
     """
     tool = _ensure_language_tool()
     if tool is None:
         return markdown_text
     try:
         matches = tool.check(markdown_text)
-        corrected = lt_utils.correct(markdown_text, matches) if lt_utils else markdown_text
-        return corrected or markdown_text
+
+        def _tokens(text: str) -> list[str]:
+            # Keep alphanumeric tokens (including accents) to preserve names.
+            return re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+
+        def _is_safe_replacement(src: str, repl: str) -> bool:
+            # Allow only punctuation/spacing/casing changes; forbid lexical edits/splits.
+            src_tokens = _tokens(src)
+            repl_tokens = _tokens(repl)
+            if len(src_tokens) != len(repl_tokens):
+                return False
+            if [t.casefold() for t in src_tokens] != [t.casefold() for t in repl_tokens]:
+                return False
+            return True
+
+        edits = []
+        for mt in matches:
+            repl = mt.replacements[0] if mt.replacements else None
+            if not repl:
+                continue
+            src_slice = markdown_text[mt.offset : mt.offset + mt.errorLength]
+            if _is_safe_replacement(src_slice, repl):
+                edits.append((mt.offset, mt.errorLength, repl))
+
+        if not edits:
+            return markdown_text
+
+        edits.sort(key=lambda x: x[0], reverse=True)
+        buf = markdown_text
+        for off, ln, repl in edits:
+            buf = buf[:off] + repl + buf[off + ln :]
+        return buf
     except Exception as err:
         print(f"⚠️ LanguageTool correction skipped: {err}")
         return markdown_text
