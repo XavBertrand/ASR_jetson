@@ -66,6 +66,7 @@ dependencies = [
   "sacremoses>=0.1.1",
   "pypandoc>=1.15",
   "gliner>=0.2.22",
+  "weasyprint>=67.0",
 ]
 
 [project.optional-dependencies]
