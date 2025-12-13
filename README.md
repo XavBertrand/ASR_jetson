@@ -100,11 +100,14 @@ uv run asr-pipeline \
   --pyannote-pipeline pyannote/speaker-diarization-3.1 \
   --pyannote-token "$HUGGINGFACE_TOKEN" \
   --asr-prompt "Mots cles: Kleos, DGA, spatial." \
-  --speaker-context "SPK_1 (sales lead) interviewing SPK_2 (candidate)"
+  --speaker-context "SPK_1 (sales lead) interviewing SPK_2 (candidate)" \
+  --meeting-date 2024-05-10
 ```
 
 * Switch `--device cpu` when CUDA is unavailable.
 * Meeting reports require anonymization (enabled by default) and `MISTRAL_API_KEY`.
+* `--meeting-date YYYY-MM-DD` sets the reference date injected into the Mistral prompt and used in the PDF filename; defaults to today.
+* Reports are exported as Markdown, PDF, and DOCX with aligned names (e.g., `compte_rendu_<audio>_<date>_<time>.pdf` / `.docx`).
 * Use `--asr-prompt` to bias decoding with domain terms (keep it short: `Mots cles: Kleos, DGA`).
 * Use `--speaker-context` for an anonymized speaker/role summary; anonymization re-tags the hint before the report LLM call.
 * For debugging, run `uv run python -m asr_jetson.pipeline.cli ...`.
@@ -122,9 +125,9 @@ uv run asr-pipeline \
   "txt_anon": "outputs/txt/sample_pyannote_..._turbo_anon.txt",
   "txt_anon_llm": "outputs/txt/sample_pyannote_..._turbo_anon_clean.txt",
   "anon_mapping": "outputs/json/sample_pyannote_..._turbo_anon_mapping.json",
-  "report_docx": "outputs/reports/sample_meeting_report.docx",
+  "report_docx": "outputs/pdf/compte_rendu_sample_2024-05-10_154233.docx",
   "report_markdown": "outputs/reports/sample_meeting_report.md",
-  "report_pdf": "outputs/pdf/sample_meeting_report.pdf",
+  "report_pdf": "outputs/pdf/compte_rendu_sample_2024-05-10_154233.pdf",
   "report_status": "generated",
   "report_reason": ""
 }

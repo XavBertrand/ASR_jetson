@@ -25,22 +25,25 @@ def main() -> None:
     p.add_argument("--out-dir", default="outputs", help="Output directory (json/srt/txt)")
     p.add_argument("--pyannote-pipeline", default="pyannote/speaker-diarization-3.1", help="Pyannote pipeline identifier to use for diarization")
     p.add_argument("--pyannote-token", default=None, help="Hugging Face token for private Pyannote pipelines (optional)")
+    p.add_argument("--monitor-gpu-memory", action="store_true",help="Print GPU memory usage at key stages of the pipeline")
+    p.add_argument("--asr-prompt", type=str, default="Kleos, Pennylane, CJD, Manupro, El Moussaoui", help="Optional initial prompt sent to Faster-Whisper to bias decoding")
+    p.add_argument("--speaker-context", type=str, default=None, help="Optional anonymized description of the speakers/roles to help the report (kept local)")
     p.add_argument(
-        "--monitor-gpu-memory",
-        action="store_true",
-        help="Print GPU memory usage at key stages of the pipeline",
-    )
-    p.add_argument(
-        "--asr-prompt",
-        type=str,
-        default="Kleos, Pennylane, CJD"
-,        help="Optional initial prompt sent to Faster-Whisper to bias decoding",
-    )
-    p.add_argument(
-        "--speaker-context",
+        "--meeting-date",
         type=str,
         default=None,
-        help="Optional anonymized description of the speakers/roles to help the report (kept local)",
+        help="Date de l'entretien (YYYY-MM-DD) utilisée pour le prompt et le nom du rapport (défaut : aujourd'hui)",
+    )
+    p.add_argument("--meeting-report-type",
+        type=str,
+        default="entretien_collaborateur",
+        choices=[
+            "entretien_collaborateur",
+            "entretien_client_particulier_contentieux",
+            "entretien_client_professionnel_conseil",
+            "entretien_client_professionnel_contentieux",
+        ],
+        help="Prompt category for the meeting report (matches keys in mistral_prompts.json)",
     )
     args = p.parse_args()
 
@@ -57,6 +60,8 @@ def main() -> None:
         monitor_gpu_memory=args.monitor_gpu_memory,
         asr_prompt=args.asr_prompt,
         speaker_context=args.speaker_context,
+        meeting_report_prompt_key=args.meeting_report_type,
+        meeting_date=args.meeting_date,
     )
     result = run_pipeline(args.audio, cfg)
     print("✓ pipeline done\nJSON:", result.get("json"), "\nSRT:", result.get("srt"), "\nTXT:", result.get("txt"), "\nTXT CLEANED:", result.get("txt_llm"))
