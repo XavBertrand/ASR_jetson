@@ -92,6 +92,9 @@ body {
 
 .content {
   /* pour éviter que le contenu ne colle à l’en-tête/pied en PDF multi-pages */
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
 }
 
 /* ------------ Titres & structure ------------ */

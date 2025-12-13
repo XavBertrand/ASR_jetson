@@ -3,15 +3,18 @@ Full ASR pipeline orchestration, spanning preprocessing, diarization, ASR,
 and post-processing exports.
 """
 from __future__ import annotations
+
 import copy
-from dataclasses import dataclass
-from pathlib import Path
-import re
+import gc
 import json
 import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
 import torch
-import gc
-from typing import Dict, List, Optional, Any, Set
 
 # === Imports from the project modules ===
 # Denoising
@@ -150,6 +153,7 @@ class PipelineConfig:
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
+    meeting_date: Optional[str] = None
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -282,6 +286,12 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
     monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
     monitor.log("pipeline-start")
+    run_ts = datetime.now()
+    meeting_date = (
+        (cfg.meeting_date or run_ts.strftime("%Y-%m-%d")).strip()
+        or run_ts.strftime("%Y-%m-%d")
+    )
+    run_time_label = run_ts.strftime("%H%M%S")
 
     # Avoid CTranslate2 crashes by harmonising compute_type with the device.
     compute_type = _sanitize_whisper_compute(device, cfg.whisper_compute)
@@ -522,10 +532,11 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
                 f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
                 + anonymized_payload
             )
+        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date)
         analysis_anonymized = mistral_client.chat_complete(
             model=prompt.model,
             system=prompt.system,
-            user_text=prompt.user_prefix + anonymized_payload,
+            user_text=user_prefix + anonymized_payload,
             temperature=0.1,
         )
 
@@ -540,6 +551,9 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             output_dir=root_dir / cfg.out_dir,
             run_id=txt_stem,
             prompt_key=cfg.meeting_report_prompt_key,
+            meeting_date=meeting_date,
+            audio_stem=Path(audio_path).stem,
+            run_time=run_time_label,
         )
         # Preserve legacy keys expected by callers.
         report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))

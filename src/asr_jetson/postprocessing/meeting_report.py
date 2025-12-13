@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -28,6 +31,18 @@ except Exception as _err:  # pragma: no cover - executed when weasyprint missing
     _HAS_WEASYPRINT = False
     _WEASYPRINT_IMPORT_ERROR = _err
 
+try:  # pragma: no cover - optional dependency
+    import language_tool_python  # type: ignore
+    from language_tool_python import utils as lt_utils  # type: ignore
+
+    _HAS_LANGUAGETOOL = True
+    _LANGUAGETOOL_IMPORT_ERROR: Optional[Exception] = None
+except Exception as _err:  # pragma: no cover - executed when language_tool_python missing
+    language_tool_python = None  # type: ignore
+    lt_utils = None  # type: ignore
+    _HAS_LANGUAGETOOL = False
+    _LANGUAGETOOL_IMPORT_ERROR = _err
+
 _PANDOC_MD_FORMAT = (
     "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html+fenced_divs"
     "-yaml_metadata_block"
@@ -41,6 +56,87 @@ PROMPT_TITLE_MAP: dict[str, str] = {
     "entretien_client_professionnel_conseil": "Compte Rendu d'Entretien Client",
     "entretien_client_professionnel_contentieux": "Compte Rendu d'Entretien Client",
 }
+_LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
+_LT_DISABLED = (os.getenv("DISABLE_LANGUAGETOOL") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+_LT_INIT_DONE = False
+_LT_INIT_ERROR: Optional[str] = None
+_LT_TOOL: Optional[Any] = None
+
+
+def _prepare_lt_home() -> Optional[str]:
+    """
+    Ensure a writable LanguageTool cache directory exists and is exported.
+    """
+    env_value = os.environ.get("LT_HOME")
+    candidates = []
+    if env_value:
+        candidates.append(Path(env_value))
+    else:
+        xdg_cache = os.environ.get("XDG_CACHE_HOME")
+        if xdg_cache:
+            candidates.append(Path(xdg_cache) / "LanguageTool")
+        candidates.append(Path.home() / ".cache" / "LanguageTool")
+        candidates.append(Path.cwd() / ".cache" / "LanguageTool")
+        candidates.append(Path(tempfile.gettempdir()) / "LanguageTool")
+
+    for path in candidates:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        resolved = str(path)
+        os.environ.setdefault("LT_HOME", resolved)
+        os.environ.setdefault("LTP_PATH", resolved)
+        return resolved
+    return None
+
+
+def _ensure_language_tool() -> Optional[Any]:
+    """
+    Lazily instantiate LanguageTool (French) with optional remote endpoint support.
+    """
+    global _LT_INIT_DONE, _LT_INIT_ERROR, _LT_TOOL
+    if _LT_TOOL is not None:
+        return _LT_TOOL
+    if _LT_DISABLED or _LT_INIT_DONE or not _HAS_LANGUAGETOOL:
+        _LT_INIT_DONE = True
+        return None
+
+    _LT_INIT_DONE = True
+    try:
+        cache_dir = _prepare_lt_home()
+        if cache_dir:
+            os.environ.setdefault("LTP_PATH", cache_dir)
+
+        tool_cls = language_tool_python.LanguageTool  # type: ignore[attr-defined]
+        _LT_TOOL = tool_cls("fr", remote_server=_LT_ENDPOINT) if _LT_ENDPOINT else tool_cls("fr")
+        return _LT_TOOL
+    except Exception as err:
+        _LT_INIT_ERROR = str(err)
+        _LT_TOOL = None
+        print(f"⚠️ LanguageTool unavailable: {err}")
+        return None
+
+
+def _polish_markdown_with_languagetool(markdown_text: str) -> str:
+    """
+    Apply LanguageTool corrections to the deanonymized report Markdown.
+    """
+    tool = _ensure_language_tool()
+    if tool is None:
+        return markdown_text
+    try:
+        matches = tool.check(markdown_text)
+        corrected = lt_utils.correct(markdown_text, matches) if lt_utils else markdown_text
+        return corrected or markdown_text
+    except Exception as err:
+        print(f"⚠️ LanguageTool correction skipped: {err}")
+        return markdown_text
 
 
 def pdf_export_prerequisites() -> list[str]:
@@ -109,7 +205,20 @@ def _derive_base_name(anonymized_path: Path, run_id: Optional[str] = None) -> st
     return stem
 
 
-def _build_html_report(markdown_text: str, *, title: Optional[str] = None) -> str:
+def _safe_filename_component(component: str, fallback: str) -> str:
+    """
+    Sanitize a string to be file-system friendly while keeping it readable.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", component.strip())
+    return cleaned or fallback
+
+
+def _build_html_report(
+    markdown_text: str,
+    *,
+    title: Optional[str] = None,
+    report_date: Optional[str] = None,
+) -> str:
     if not _HAS_PYPANDOC:
         raise RuntimeError(
             "pypandoc is required to render HTML reports"
@@ -119,8 +228,8 @@ def _build_html_report(markdown_text: str, *, title: Optional[str] = None) -> st
         raise FileNotFoundError(f"Meeting report template missing: {_REPORT_TEMPLATE_PATH}")
 
     extra_args = ["--standalone", "--template", str(_REPORT_TEMPLATE_PATH)]
-    today = datetime.now().strftime("%d/%m/%Y")
-    extra_args.extend(["--metadata", f"date={today}"])
+    date_value = report_date or datetime.now().strftime("%d/%m/%Y")
+    extra_args.extend(["--metadata", f"date={date_value}"])
     if title:
         extra_args.extend(["--metadata", f"title={title}"])
 
@@ -132,7 +241,13 @@ def _build_html_report(markdown_text: str, *, title: Optional[str] = None) -> st
     )
 
 
-def _render_pdf_report(markdown_text: str, out_path: Path, *, title: Optional[str] = None) -> None:
+def _render_pdf_report(
+    markdown_text: str,
+    out_path: Path,
+    *,
+    title: Optional[str] = None,
+    report_date: Optional[str] = None,
+) -> None:
     if not _HAS_WEASYPRINT:
         raise RuntimeError(
             "weasyprint is required to export meeting reports to PDF"
@@ -141,11 +256,39 @@ def _render_pdf_report(markdown_text: str, out_path: Path, *, title: Optional[st
     if not _REPORT_CSS_PATH.exists():
         raise FileNotFoundError(f"Meeting report CSS missing: {_REPORT_CSS_PATH}")
 
-    html_report = _build_html_report(markdown_text, title=title)
+    html_report = _build_html_report(markdown_text, title=title, report_date=report_date)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     HTML(string=html_report, base_url=str(_REPORT_TEMPLATE_PATH.parent)).write_pdf(
         target=str(out_path),
         stylesheets=[CSS(filename=str(_REPORT_CSS_PATH))],
+    )
+
+
+def _render_docx_report(
+    markdown_text: str,
+    out_path: Path,
+    *,
+    title: Optional[str] = None,
+    report_date: Optional[str] = None,
+) -> None:
+    if not _HAS_PYPANDOC:
+        raise RuntimeError(
+            "pypandoc is required to export meeting reports to DOCX"
+        ) from _PYPANDOC_IMPORT_ERROR
+
+    extra_args = []
+    date_value = report_date or datetime.now().strftime("%d/%m/%Y")
+    extra_args.extend(["--metadata", f"date={date_value}"])
+    if title:
+        extra_args.extend(["--metadata", f"title={title}"])
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pypandoc.convert_text(  # type: ignore[call-arg]
+        markdown_text,
+        to="docx",
+        format=_PANDOC_MD_FORMAT,
+        outputfile=str(out_path),
+        extra_args=extra_args,
     )
 
 
@@ -166,6 +309,9 @@ def generate_pdf_report(
     run_id: Optional[str] = None,
     title: Optional[str] = None,
     prompt_key: Optional[str] = None,
+    meeting_date: Optional[str] = None,
+    audio_stem: Optional[str] = None,
+    run_time: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Produce a deanonymized Markdown report and render it to PDF using the shared HTML/CSS assets.
@@ -175,23 +321,51 @@ def generate_pdf_report(
     anonymized_md = _load_markdown(Path(anonymized_markdown_path))
     mapping = _normalize_mapping(_load_mapping(Path(mapping_json_path)))
     deanonymized_md = deanonymize_report_markdown(anonymized_md, mapping)
+    corrected_md = _polish_markdown_with_languagetool(deanonymized_md)
 
     base = _derive_base_name(Path(anonymized_markdown_path), run_id=run_id)
+    meeting_date_str = (
+        (meeting_date or datetime.now().strftime("%Y-%m-%d")).strip()
+        or datetime.now().strftime("%Y-%m-%d")
+    )
+    run_time_str = (
+        (run_time or datetime.now().strftime("%H%M%S")).strip()
+        or datetime.now().strftime("%H%M%S")
+    )
+    audio_component = str(audio_stem or base)
     reports_dir = Path(output_dir) / "reports"
     pdf_dir = Path(output_dir) / "pdf"
     reports_dir.mkdir(parents=True, exist_ok=True)
     pdf_dir.mkdir(parents=True, exist_ok=True)
 
     md_path = reports_dir / f"{base}_meeting_report.md"
-    pdf_path = pdf_dir / f"{base}_meeting_report.pdf"
-    md_path.write_text(deanonymized_md, encoding="utf-8")
+    pdf_filename = "compte_rendu_{audio}_{date}_{time}.pdf".format(
+        audio=_safe_filename_component(audio_component, "audio"),
+        date=_safe_filename_component(meeting_date_str, "date"),
+        time=_safe_filename_component(run_time_str, "time"),
+    )
+    pdf_path = pdf_dir / pdf_filename
+    docx_path = pdf_path.with_suffix(".docx")
+    md_path.write_text(corrected_md, encoding="utf-8")
 
     report_title = title or resolve_default_report_title(prompt_key)
-    _render_pdf_report(deanonymized_md, pdf_path, title=report_title)
+    _render_pdf_report(
+        corrected_md,
+        pdf_path,
+        title=report_title,
+        report_date=meeting_date_str,
+    )
+    _render_docx_report(
+        corrected_md,
+        docx_path,
+        title=report_title,
+        report_date=meeting_date_str,
+    )
 
     return {
         "report_markdown": str(md_path),
         "report_pdf": str(pdf_path),
+        "report_docx": str(docx_path),
         "report_status": "generated",
         "report_reason": "",
     }

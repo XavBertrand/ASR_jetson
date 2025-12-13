@@ -89,10 +89,11 @@ def test_pipeline_style_meeting_report_generation(tmp_path: Path, monkeypatch):
     )
     prompts_path = PROJECT_ROOT / "src/asr_jetson/config/mistral_prompts.json"
     prompt = mistral_client.load_prompts(str(prompts_path))
+    meeting_date = "2024-01-02"
     generated_anonymized_report = mistral_client.chat_complete(
         prompt.model,
         prompt.system,
-        prompt.user_prefix + anonymized_text,
+        prompt.user_prefix.format(meeting_date=meeting_date) + anonymized_text,
         temperature=0.1,
     )
 
@@ -108,12 +109,18 @@ def test_pipeline_style_meeting_report_generation(tmp_path: Path, monkeypatch):
         output_dir=tmp_path,
         run_id="transcription",
         title="Entretien professionnel",
+        meeting_date=meeting_date,
+        audio_stem="transcription",
+        run_time="101112",
     )
 
     md_path = Path(result["report_markdown"])
     pdf_path = Path(result["report_pdf"])
+    docx_path = Path(result["report_docx"])
     assert md_path.exists(), "Le Markdown désanonymisé doit être écrit"
     assert pdf_path.exists(), "Le PDF doit être généré"
+    assert docx_path.exists(), "Le DOCX doit être généré"
+    assert docx_path.suffix == ".docx"
 
     markdown = md_path.read_text(encoding="utf-8")
     # Les pseudonymes doivent avoir été remplacés.
@@ -129,6 +136,7 @@ def test_pipeline_style_meeting_report_generation(tmp_path: Path, monkeypatch):
     pdf_bytes = pdf_path.read_bytes()
     assert pdf_bytes.startswith(b"%PDF"), "Le fichier généré doit être un PDF valide"
     assert pdf_path.stat().st_size > 500, "Le PDF doit contenir du contenu"
+    assert docx_path.stat().st_size > 500, "Le DOCX doit contenir du contenu"
 
 
 def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
@@ -154,6 +162,7 @@ def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
     # 2) Mistral (mock) pour produire le rapport anonymisé.
     anonymized_report_md = report_fixture.read_text(encoding="utf-8")
     captured: dict[str, str] = {}
+    meeting_date = "2024-01-03"
 
     def _fake_chat_complete(model, system, user_text, temperature=None):
         captured["model"] = model
@@ -168,10 +177,12 @@ def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
     generated_report = mistral_client.chat_complete(
         prompt.model,
         prompt.system,
-        prompt.user_prefix + anonymized_transcription,
+        prompt.user_prefix.format(meeting_date=meeting_date) + anonymized_transcription,
         temperature=0.1,
     )
-    assert captured.get("user_text", "").startswith(prompt.user_prefix), "Le prompt utilisateur doit être préfixé"
+    assert captured.get("user_text", "").startswith(
+        prompt.user_prefix.format(meeting_date=meeting_date)
+    ), "Le prompt utilisateur doit être préfixé"
     assert captured.get("model") == prompt.model
     assert captured.get("system") == prompt.system
     reports_dir = tmp_path / "reports"
@@ -186,12 +197,17 @@ def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
         output_dir=tmp_path,
         run_id="transcription",
         title="Entretien professionnel",
+        meeting_date=meeting_date,
+        audio_stem="transcription",
+        run_time="131415",
     )
 
     md_path = Path(result["report_markdown"])
     pdf_path = Path(result["report_pdf"])
+    docx_path = Path(result["report_docx"])
     assert md_path.exists(), "Le Markdown désanonymisé doit être produit"
     assert pdf_path.exists(), "Le PDF doit être généré"
+    assert docx_path.exists(), "Le DOCX doit être généré"
 
     markdown = md_path.read_text(encoding="utf-8")
     assert "Bleu Horizon Partners" not in markdown
@@ -207,3 +223,4 @@ def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
     pdf_bytes = pdf_path.read_bytes()
     assert pdf_bytes.startswith(b"%PDF")
     assert pdf_path.stat().st_size > 500
+    assert docx_path.stat().st_size > 500
