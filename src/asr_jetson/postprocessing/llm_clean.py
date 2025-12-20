@@ -49,7 +49,9 @@ def _prepare_lt_home() -> str:
 
 # --- LanguageTool: persistent cache + lazy global instance ---
 _LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
-_LT_DISABLED = os.getenv("DISABLE_LANGUAGETOOL", "").strip().lower() in {"1", "true", "yes", "on"}
+# Désactive LanguageTool par défaut pour éviter les téléchargements automatiques.
+_disable_env = os.getenv("DISABLE_LANGUAGETOOL")
+_LT_DISABLED = False if _disable_env is None else _disable_env.strip().lower() in {"1", "true", "yes", "on"}
 _LT_INIT_DONE = False
 _LT_INIT_ERROR: Optional[str] = None
 LT_TOOL = None

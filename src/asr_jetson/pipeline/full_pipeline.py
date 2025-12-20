@@ -3,15 +3,18 @@ Full ASR pipeline orchestration, spanning preprocessing, diarization, ASR,
 and post-processing exports.
 """
 from __future__ import annotations
+
 import copy
-from dataclasses import dataclass
-from pathlib import Path
-import re
+import gc
 import json
 import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+
 import torch
-import gc
-from typing import Dict, List, Optional, Any, Set
 
 # === Imports from the project modules ===
 # Denoising
@@ -26,8 +29,9 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import load_catalog
-from asr_jetson.postprocessing.meeting_report import generate_meeting_report
+from asr_jetson.postprocessing.meeting_report import generate_pdf_report
 from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
+from asr_jetson.postprocessing import mistral_client
 
 
 # --- Helpers ---
@@ -145,10 +149,11 @@ class PipelineConfig:
     anon_max_block_sents: int = 5
     generate_meeting_report: bool = True
     meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
-    meeting_report_prompt_key: str = "meeting_analysis"
+    meeting_report_prompt_key: str = "entretien_collaborateur"
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
+    meeting_date: Optional[str] = None
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -281,6 +286,12 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
     monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
     monitor.log("pipeline-start")
+    run_ts = datetime.now()
+    meeting_date = (
+        (cfg.meeting_date or run_ts.strftime("%Y-%m-%d")).strip()
+        or run_ts.strftime("%Y-%m-%d")
+    )
+    run_time_label = run_ts.strftime("%H%M%S")
 
     # Avoid CTranslate2 crashes by harmonising compute_type with the device.
     compute_type = _sanitize_whisper_compute(device, cfg.whisper_compute)
@@ -513,13 +524,41 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             prompts_path = (root_dir / prompts_path).resolve()
         if not prompts_path.exists():
             raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-        report_outputs = generate_meeting_report(
-            anonymized_txt_path=out_txt_anon_clean,
-            mapping_json_path=out_mapping_json,
-            prompts_json_path=prompts_path,
-            prompt_key=cfg.meeting_report_prompt_key,
-            speaker_context=speaker_context_anon,
+
+        prompt = mistral_client.load_prompts(str(prompts_path), key=cfg.meeting_report_prompt_key)
+        anonymized_payload = out_txt_anon_clean.read_text(encoding="utf-8")
+        if speaker_context_anon:
+            anonymized_payload = (
+                f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
+                + anonymized_payload
+            )
+        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date)
+        analysis_anonymized = mistral_client.chat_complete(
+            model=prompt.model,
+            system=prompt.system,
+            user_text=user_prefix + anonymized_payload,
+            temperature=0.1,
         )
+
+        reports_dir = root_dir / cfg.out_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_anon_path = reports_dir / f"{txt_stem}_meeting_report_anonymized.md"
+        report_anon_path.write_text(analysis_anonymized, encoding="utf-8")
+
+        report_outputs = generate_pdf_report(
+            anonymized_markdown_path=report_anon_path,
+            mapping_json_path=out_mapping_json,
+            output_dir=root_dir / cfg.out_dir,
+            run_id=txt_stem,
+            prompt_key=cfg.meeting_report_prompt_key,
+            meeting_date=meeting_date,
+            audio_stem=Path(audio_path).stem,
+            run_time=run_time_label,
+        )
+        # Preserve legacy keys expected by callers.
+        report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))
+        report_outputs.setdefault("report_txt", None)
+        report_outputs.setdefault("report_docx", None)
 
     torch.cuda.empty_cache()
     gc.collect()

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>$if(title)$$title$$else$Compte-rendu de réunion$endif$</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Feuille de style principale -->
+  <link rel="stylesheet" href="report.css" />
+
+  <!-- CSS de surlignage éventuel généré par pandoc -->
+  <style>
+  $if(highlighting-css)$
+  $highlighting-css$
+  $endif$
+  </style>
+</head>
+<body>
+
+  <header class="page-header">
+    <div class="header-left">
+      <div class="header-brand">
+        <img class="header-logo" src="assets/action-avocats-logo.jpg" alt="Logo Action Avocats" />
+        <div class="cabinet-name">$if(author)$$author$$else$ACTION AVOCATS$endif$</div>
+      </div>
+      <div class="report-title">$if(title)$$title$$else$Compte-rendu d’entretien$endif$</div>
+    </div>
+    <div class="header-right">
+      <div class="meta-label">Date</div>
+      <div class="meta-value">$if(date)$$date$$else$Non précisée$endif$</div>
+    </div>
+  </header>
+
+  <main class="content">
+    $body$
+  </main>
+
+  <footer class="page-footer">
+    <div class="footer-left">
+      Compte-rendu confidentiel – usage interne uniquement
+    </div>
+    <div class="footer-right">
+      Page <span class="page-number"></span>
+    </div>
+  </footer>
+
+</body>
+</html>
