@@ -93,7 +93,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     find /opt/venv -type d -name "tests" -prune -exec rm -rf {} +; \
     find /opt/venv -type d -name "__pycache__" -prune -exec rm -rf {} +; \
     find /opt/venv -name "*.pyc" -delete; \
-    rm -rf /root/.cache /tmp/* /var/tmp/*
+    rm -rf /tmp/* /var/tmp/*
 
 # Copier le code
 COPY . .
