@@ -212,6 +212,7 @@ jobs:
             VCS_REF=${{ steps.vars.outputs.vcs_ref }}
             BUILD_DATE=${{ steps.vars.outputs.build_date }}
             APP_VERSION=${{ steps.vars.outputs.app_version }}
+            ENABLE_TENSORRT=0
             BUILDKIT_INLINE_CACHE=0
           builder: ${{ steps.buildx.outputs.name }}
 

@@ -1,6 +1,7 @@
 # Image NVIDIA officielle avec CUDA 12.6 + PyTorch
 ARG PYTORCH_IMAGE=nvcr.io/nvidia/pytorch:24.09-py3
 FROM ${PYTORCH_IMAGE}
+ARG ENABLE_TENSORRT=0
 
 # --- Build-time metadata (injectés par le workflow) ---
 ARG GIT_BRANCH=unknown
@@ -74,11 +75,16 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv pip install --no-cache-dir -e ".[media,tensorrt]"; \
+    uv pip install --no-cache-dir -e ".[media]"; \
     uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"; \
-    uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
-    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 ctranslate2[tensorrt]; \
-    uv pip install --no-cache-dir faster-whisper[tensorrt]; \
+    if [ "${ENABLE_TENSORRT}" = "1" ]; then \
+        uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
+        uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 ctranslate2[tensorrt]; \
+        uv pip install --no-cache-dir faster-whisper[tensorrt]; \
+    else \
+        uv pip install --no-cache-dir ctranslate2; \
+        uv pip install --no-cache-dir faster-whisper; \
+    fi; \
     PRECOMPILED_CUDNN="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9"; \
     if [ -f "${PRECOMPILED_CUDNN}" ]; then \
         echo "Removing precompiled cuDNN engines to save space"; \
