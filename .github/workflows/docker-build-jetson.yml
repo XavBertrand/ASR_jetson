@@ -27,7 +27,8 @@ jobs:
       packages: read
 
     env:
-      IMAGE_NAME: xbmtb82/asr_jetson
+      IMAGE_REPO: xbmtb82/asr_jetson
+      IMAGE_REPO_DEV: xbmtb82/asr_jetson-dev
 
     steps:
       - name: Checkout
@@ -125,18 +126,34 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Select image repo (dev for PR, prod for tags/branches)
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "IMAGE_NAME=${{ env.IMAGE_REPO_DEV }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_NAME=${{ env.IMAGE_REPO }}" >> $GITHUB_ENV
+          fi
+
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
+            # PR => images "dev"
+            type=ref,event=pr,prefix=dev-pr-
+            type=sha,event=pr,format=short,prefix=dev-
+
+            # (optionnal) Branch
             type=ref,event=branch
-            type=ref,event=pr,prefix=pr-
             type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
             type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
-            type=semver,pattern={{version}},event=tag
-            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
+
+            # Release tag vX.Y.Z => tags docker X.Y.Z + latest
+            type=semver,event=tag,pattern={{version}}
+            type=raw,value=latest,event=tag
+
       - name: Compute build vars
         id: vars
         shell: bash
