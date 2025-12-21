@@ -94,47 +94,64 @@ uv run asr-pipeline \
   --audio path/to/file.wav \
   --out-dir outputs \
   --device cuda \
+  --whisper-model h2oai/faster-whisper-large-v3-turbo \
+  --whisper-compute int8_float16 \
+  --lang fr \
   --denoise \
   --speakers 2 \
-  --whisper-model h2oai/faster-whisper-large-v3-turbo \
   --pyannote-pipeline pyannote/speaker-diarization-3.1 \
   --pyannote-token "$HUGGINGFACE_TOKEN" \
-  --asr-prompt "Mots cles: Kleos, DGA, spatial." \
+  --asr-prompt "Keywords: Kleos, DGA, space." \
   --speaker-context "SPK_1 (sales lead) interviewing SPK_2 (candidate)" \
-  --meeting-date 2024-05-10
+  --meeting-date 2024-05-10 \
+  --meeting-report-type entretien_collaborateur \
+  --monitor-gpu-memory
 ```
 
-* Switch `--device cpu` when CUDA is unavailable.
-* Meeting reports require anonymization (enabled by default) and `MISTRAL_API_KEY`.
-* `--meeting-date YYYY-MM-DD` sets the reference date injected into the Mistral prompt and used in the PDF filename; defaults to today.
-* Reports are exported as Markdown, PDF, and DOCX with aligned names (e.g., `compte_rendu_<audio>_<date>_<time>.pdf` / `.docx`).
-* Use `--asr-prompt` to bias decoding with domain terms (keep it short: `Mots cles: Kleos, DGA`).
-* Use `--speaker-context` for an anonymized speaker/role summary; anonymization re-tags the hint before the report LLM call.
-* For debugging, run `uv run python -m asr_jetson.pipeline.cli ...`.
-* Jetson builds default to `pyannote/speaker-diarization-3.1` (Pyannote Audio 3.x) because `torchcodec` wheels are unavailable on aarch64; desktop x86_64 users can switch to `pyannote/speaker-diarization-community-1` (Pyannote 4.x) for the latest pipeline.
-* Add `--monitor-gpu-memory` to print per-stage CUDA memory usage for troubleshooting.
+Argument reference (mirrors `asr_jetson.pipeline.cli` exactly):
+
+- `--audio` (required): Input audio (wav/mp3/flac); converted to WAV automatically.
+- `--out-dir` (default `outputs`): Root directory for JSON/SRT/TXT and reports.
+- `--device` (default `cuda`): Uses CUDA when available, otherwise falls back to CPU. Use `--device cpu` to force CPU.
+- `--whisper-model` (default `h2oai/faster-whisper-large-v3-turbo`): Faster-Whisper model id (e.g., `openai/whisper-large-v3-turbo`, `medium`).
+- `--whisper-compute` (default `int8_float16`): CTranslate2 `compute_type`; on GPU `int8` is auto-sanitized to `int8_float16`, and an unsupported value falls back to `float16`. On CPU, `int8` is the practical choice.
+- `--lang` (default `fr`): Forced transcription language (ISO code). The decoder always forces a language; set this to `en`, `es`, etc. as needed.
+- `--denoise`: Enable RNNoise preprocessing before diarization/ASR.
+- `--speakers`: Optional expected speaker count forwarded to Pyannote.
+- `--pyannote-pipeline` (default `pyannote/speaker-diarization-3.1`): Pyannote pipeline id. `pyannote/speaker-diarization-community-1` (Pyannote 4.x) is available on x86_64.
+- `--pyannote-token`: Hugging Face token; falls back to the `HUGGINGFACE_TOKEN` env var when omitted.
+- `--asr-prompt`: Initial prompt passed to Faster-Whisper to bias decoding; defaults to `Kleos, Pennylane, CJD, Manupro, El Moussaoui`.
+- `--speaker-context`: Optional speaker/role description injected (after anonymization) into the meeting report prompt.
+- `--meeting-date`: Reference date (`YYYY-MM-DD`) used in the report prompt and filenames; defaults to today's date.
+- `--meeting-report-type`: Meeting report prompt category (`entretien_collaborateur`, `entretien_client_particulier_contentieux`, `entretien_client_professionnel_conseil`, `entretien_client_professionnel_contentieux`); defaults to `entretien_collaborateur`.
+- `--monitor-gpu-memory`: Print per-stage CUDA memory usage (only when CUDA is available).
+
+Meeting report generation is enabled by default and requires both `MISTRAL_API_KEY` and the `mistralai` package; missing prerequisites cause a runtime error (there is no CLI switch to disable the report stage).
+For debugging, run `uv run python -m asr_jetson.pipeline.cli ...`.
 
 ### Example Output
 
 ```json
 {
-  "json": "outputs/json/sample_pyannote_..._turbo.json",
-  "srt": "outputs/srt/sample_pyannote_..._turbo.srt",
-  "txt": "outputs/txt/sample_pyannote_..._turbo.txt",
-  "txt_llm": "outputs/txt/sample_pyannote_..._turbo_clean.txt",
-  "txt_anon": "outputs/txt/sample_pyannote_..._turbo_anon.txt",
-  "txt_anon_llm": "outputs/txt/sample_pyannote_..._turbo_anon_clean.txt",
-  "anon_mapping": "outputs/json/sample_pyannote_..._turbo_anon_mapping.json",
-  "report_docx": "outputs/pdf/compte_rendu_sample_2024-05-10_154233.docx",
-  "report_markdown": "outputs/reports/sample_meeting_report.md",
+  "json": "outputs/json/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo.json",
+  "srt": "outputs/srt/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo.srt",
+  "txt": "outputs/txt/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo.txt",
+  "txt_llm": "outputs/txt/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_clean.txt",
+  "txt_anon": "outputs/txt/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_anon.txt",
+  "txt_anon_llm": "outputs/txt/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_anon_clean.txt",
+  "anon_mapping": "outputs/json/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_anon_mapping.json",
+  "report_anonymized_txt": "outputs/reports/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_meeting_report_anonymized.md",
+  "report_markdown": "outputs/reports/sample_pyannote_speaker-diarization-3.1_h2oai_faster-whisper-large-v3-turbo_meeting_report.md",
   "report_pdf": "outputs/pdf/compte_rendu_sample_2024-05-10_154233.pdf",
+  "report_docx": "outputs/pdf/compte_rendu_sample_2024-05-10_154233.docx",
+  "report_txt": null,
   "report_status": "generated",
   "report_reason": ""
 }
 ```
 
-Running the pipeline writes diarized segments, transcripts, anonymized variants, and report artifacts under `outputs/`.  
-If the Mistral prerequisites are missing, `report_status` becomes `skipped` and `report_reason` explains why (e.g., missing API key or unavailable endpoint).
+Running the pipeline writes diarized segments, transcripts, anonymized variants, and report artifacts under `outputs/`.
+Report filenames embed the audio stem, meeting date, and timestamp (e.g., `compte_rendu_<audio>_<date>_<time>.pdf`/`.docx`).
 
 ---
 
