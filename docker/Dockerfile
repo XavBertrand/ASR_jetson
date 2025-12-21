@@ -71,29 +71,14 @@ COPY src ./src
 # Utiliser l'index PyTorch CUDA 12.6 pour l'installation des dépendances
 ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
-# Installer les dépendances Python de base depuis le projet
+# Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir -e ".[media,tensorrt]"
-
-# Pyannote > 4.0.1 pour compatibilité la plus récente
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"
-
-# Installer TensorRT et dépendances
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt
-
-# Installer faster-whisper avec support TensorRT
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir faster-whisper[tensorrt]
-
-# Installer CTranslate2 avec support TensorRT
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 \
-    ctranslate2[tensorrt]
-
-# Nettoyage du venv pour réduire la taille des layers (limite BuildKit sur GitHub)
-RUN set -eux; \
+    set -eux; \
+    uv pip install --no-cache-dir -e ".[media,tensorrt]"; \
+    uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"; \
+    uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
+    uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 ctranslate2[tensorrt]; \
+    uv pip install --no-cache-dir faster-whisper[tensorrt]; \
     PRECOMPILED_CUDNN="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9"; \
     if [ -f "${PRECOMPILED_CUDNN}" ]; then \
         echo "Removing precompiled cuDNN engines to save space"; \
