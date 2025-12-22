@@ -49,7 +49,8 @@ ENV PATH="/root/.local/bin:${PATH}"
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && rm -rf /root/.cache
 RUN uv python install 3.11 && uv venv --python 3.11 /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}" \
-    VIRTUAL_ENV="/opt/venv"
+    VIRTUAL_ENV="/opt/venv" \
+    UV_PROJECT_ENVIRONMENT="/opt/venv"
 
 # Définir le dossier de travail
 WORKDIR /workspace
@@ -57,16 +58,17 @@ WORKDIR /workspace
 # Variables d'environnement pour NVIDIA
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV PYTHONPATH=/workspace \
+ENV PYTHONPATH=/workspace:/workspace/src \
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:${PATH}" \
     TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
     HF_HOME=/workspace/.cache/huggingface \
-    TORCH_HOME=/workspace/.cache/torch
+    TORCH_HOME=/workspace/.cache/torch \
+    LD_LIBRARY_PATH="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cublas/lib:/opt/venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH}"
 
 # Préparer les métadonnées du projet pour profiter du cache Docker
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md uv.lock ./
 COPY src ./src
 
 # Utiliser l'index PyTorch CUDA 12.6 pour l'installation des dépendances
@@ -75,28 +77,21 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv pip install --no-cache-dir -e ".[media]"; \
-    uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"; \
+    uv sync --frozen --extra media --extra gpu-linux --python /opt/venv/bin/python; \
+    uv pip install --no-cache-dir -e . --no-deps --python /opt/venv/bin/python; \
     if [ "${ENABLE_TENSORRT}" = "1" ]; then \
         uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
         uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 ctranslate2[tensorrt]; \
         uv pip install --no-cache-dir faster-whisper[tensorrt]; \
-    else \
-        uv pip install --no-cache-dir ctranslate2; \
-        uv pip install --no-cache-dir faster-whisper; \
     fi; \
-    PRECOMPILED_CUDNN="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9"; \
-    if [ -f "${PRECOMPILED_CUDNN}" ]; then \
-        echo "Removing precompiled cuDNN engines to save space"; \
-        rm -f "${PRECOMPILED_CUDNN}"; \
-    fi; \
+    uv pip install --no-cache-dir --python /opt/venv/bin/python --force-reinstall "tokenizers>=0.20,<0.21"; \
     find /opt/venv -type d -name "tests" -prune -exec rm -rf {} +; \
     find /opt/venv -type d -name "__pycache__" -prune -exec rm -rf {} +; \
     find /opt/venv -name "*.pyc" -delete; \
     rm -rf /tmp/* /var/tmp/*
 
-# Copier le code
-COPY . .
+# Copier uniquement le code utile au runtime
+COPY scripts ./scripts
 
 # Préparer les répertoires de cache alignés avec l'image Jetson
 RUN mkdir -p /workspace/.cache/huggingface /workspace/.cache/torch
