@@ -131,7 +131,6 @@ COPY --from=builder /build/src ./src
 COPY --from=builder /build/pyproject.toml /build/README.md ./
 
 # Copie des fichiers de l'application
-COPY --chown=appuser:appuser ./models ./models
 COPY --chown=appuser:appuser ./scripts ./scripts
 
 # Configuration
@@ -145,9 +144,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
     HF_HOME=/app/.cache/huggingface \
     TORCH_HOME=/app/.cache/torch
 
-# Création des répertoires de cache
-RUN mkdir -p /app/.cache/huggingface /app/.cache/torch && \
-    chown -R appuser:appuser /app/.cache
+# Création des répertoires de cache et des emplacements pour les artefacts locaux
+RUN mkdir -p /app/.cache/huggingface /app/.cache/torch /app/models && \
+    chown -R appuser:appuser /app/.cache /app/models
 
 # Nettoyage final ultra-agressif
 RUN rm -rf /tmp/* /var/tmp/* /root/.cache /var/cache/* && \
