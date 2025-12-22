@@ -647,6 +647,112 @@ def build_mapping(spans: List[Dict], original_text: str, cfg: Settings) -> Dict:
     }
 
 
+_ACCENT_GROUPS = {
+    "a": "aàáâäãå",
+    "c": "cç",
+    "e": "eèéêë",
+    "i": "iìíîï",
+    "n": "nñ",
+    "o": "oòóôöõ",
+    "u": "uùúûü",
+    "y": "yÿ",
+}
+
+_ORG_SUFFIXES = {
+    "Conseil",
+    "Legal",
+    "Services",
+    "Industries",
+    "Groupe",
+    "Solutions",
+    "Partners",
+    "Associates",
+    "Collectif",
+    "Studio",
+}
+
+
+def _label_from_tag(tag: str) -> str:
+    match = re.match(r"<([A-Z_]+)_\\d+>", tag or "")
+    return match.group(1) if match else ""
+
+
+def _strip_org_suffix(name: str) -> str | None:
+    tokens = [tok for tok in (name or "").split() if tok]
+    if len(tokens) < 2:
+        return None
+    last = tokens[-1].strip(",.;:")
+    if last in _ORG_SUFFIXES:
+        return " ".join(tokens[:-1])
+    return None
+
+
+def _should_fuzzy_match(key: str) -> bool:
+    if not key or "<" in key or ">" in key:
+        return False
+    if re.search(r"\\d", key):
+        return False
+    return re.fullmatch(r"[A-Za-zÀ-ÿ'’\\-\\s]+", key) is not None
+
+
+def _build_accent_pattern(text: str) -> str:
+    parts: List[str] = []
+    for ch in text:
+        if ch.isspace():
+            parts.append(r"\\s+")
+            continue
+        if ch in {"'", "’"}:
+            parts.append(r"['’]")
+            continue
+        base = ch.lower()
+        if base in _ACCENT_GROUPS:
+            group = _ACCENT_GROUPS[base]
+            group = group + group.upper()
+            parts.append(f"[{re.escape(group)}]")
+        else:
+            parts.append(re.escape(ch))
+    return "".join(parts)
+
+
+def _build_fuzzy_lookup(mapping: Dict, lookup: Dict[str, str]) -> Dict[str, str]:
+    fuzzy = {k: v for k, v in lookup.items() if _should_fuzzy_match(k)}
+    pseudo_map = mapping.get("pseudonym_map")
+    entities = mapping.get("entities")
+    if not isinstance(pseudo_map, dict) or not isinstance(entities, list):
+        return fuzzy
+
+    pseudo_reverse = mapping.get("pseudonym_reverse_map") or {}
+    for ent in entities:
+        tag = ent.get("tag")
+        if not tag:
+            continue
+        label = (ent.get("type") or ent.get("label") or _label_from_tag(tag)).upper()
+        if label not in {"ORGANIZATION", "ORG"}:
+            continue
+        pseudonym = pseudo_map.get(tag)
+        if not pseudonym:
+            continue
+        canonical = pseudo_reverse.get(pseudonym) or ent.get("canonical")
+        if not canonical:
+            continue
+        alias = _strip_org_suffix(pseudonym)
+        if alias and alias not in lookup and alias not in fuzzy:
+            fuzzy[alias] = canonical
+    return fuzzy
+
+
+def _apply_fuzzy_replacements(text: str, lookup: Dict[str, str]) -> str:
+    result = text
+    for key, value in sorted(lookup.items(), key=lambda item: len(item[0]), reverse=True):
+        if not key or not value:
+            continue
+        pattern = _build_accent_pattern(key)
+        if pattern:
+            pattern = rf"(?<!\\w){pattern}(?!\\w)"
+            result = re.sub(pattern, value, result)
+    return result
+
+
 def build_tag_lookup(mapping: Dict, restore: str = "canonical") -> Dict[str, str]:
     lookup: Dict[str, str] = {}
     pseudo_reverse = mapping.get("pseudonym_reverse_map")
@@ -688,7 +794,11 @@ def deanonymize_text(anonymized_text: str, mapping: Dict, restore: str = "canoni
     if not lookup:
         return anonymized_text
     pattern = re.compile("|".join(re.escape(k) for k in sorted(lookup, key=len, reverse=True)))
-    return pattern.sub(lambda match: lookup.get(match.group(0), match.group(0)), anonymized_text)
+    result = pattern.sub(lambda match: lookup.get(match.group(0), match.group(0)), anonymized_text)
+    fuzzy_lookup = _build_fuzzy_lookup(mapping, lookup)
+    if fuzzy_lookup:
+        result = _apply_fuzzy_replacements(result, fuzzy_lookup)
+    return result
 
 
 # ---------------------------------------------------------------------------
