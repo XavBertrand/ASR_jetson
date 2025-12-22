@@ -75,7 +75,7 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv sync --frozen --extra media; \
+    uv sync --frozen --extra media --extra gpu-linux; \
     uv pip install --no-cache-dir -e . --no-deps; \
     if [ "${ENABLE_TENSORRT}" = "1" ]; then \
         uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
