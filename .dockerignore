@@ -55,8 +55,10 @@ logs/
 
 # Données et modèles (à ajuster selon vos besoins)
 # Décommentez si vous ne voulez pas inclure les modèles dans l'image
-# models/
-# data/
+models/
+outputs/
+recordings/
+data/
 
 # OS
 .DS_Store
