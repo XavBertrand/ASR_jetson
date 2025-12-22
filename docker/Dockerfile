@@ -57,7 +57,7 @@ WORKDIR /workspace
 # Variables d'environnement pour NVIDIA
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV PYTHONPATH=/workspace \
+ENV PYTHONPATH=/workspace:/workspace/src \
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
     PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:${PATH}" \
     TRANSFORMERS_NO_ADVISORY_WARNINGS=1 \
@@ -66,7 +66,7 @@ ENV PYTHONPATH=/workspace \
     TORCH_HOME=/workspace/.cache/torch
 
 # Préparer les métadonnées du projet pour profiter du cache Docker
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md uv.lock ./
 COPY src ./src
 
 # Utiliser l'index PyTorch CUDA 12.6 pour l'installation des dépendances
@@ -75,15 +75,12 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv pip install --no-cache-dir -e ".[media]"; \
-    uv pip install --no-cache-dir --upgrade "pyannote-audio>4.0.1"; \
+    uv sync --frozen --extra media; \
+    uv pip install --no-cache-dir -e . --no-deps; \
     if [ "${ENABLE_TENSORRT}" = "1" ]; then \
         uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
         uv pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cu121 ctranslate2[tensorrt]; \
         uv pip install --no-cache-dir faster-whisper[tensorrt]; \
-    else \
-        uv pip install --no-cache-dir ctranslate2; \
-        uv pip install --no-cache-dir faster-whisper; \
     fi; \
     PRECOMPILED_CUDNN="/opt/venv/lib/python3.11/site-packages/nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9"; \
     if [ -f "${PRECOMPILED_CUDNN}" ]; then \
