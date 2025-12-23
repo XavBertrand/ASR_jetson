@@ -47,8 +47,23 @@ _PANDOC_MD_FORMAT = (
     "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html+fenced_divs"
     "-yaml_metadata_block"
 )
-_REPORT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "config" / "meeting.html"
-_REPORT_CSS_PATH = Path(__file__).resolve().parent.parent / "config" / "report.css"
+def _resolve_config_dir() -> Path:
+    default_dir = Path(__file__).resolve().parents[1] / "config"
+    env_value = os.environ.get("ASR_CONFIG_DIR")
+    if not env_value:
+        return default_dir
+    env_path = Path(env_value).expanduser()
+    if not env_path.is_absolute():
+        env_path = (Path.cwd() / env_path).resolve()
+    return env_path
+
+
+def _report_template_path() -> Path:
+    return _resolve_config_dir() / "meeting.html"
+
+
+def _report_css_path() -> Path:
+    return _resolve_config_dir() / "report.css"
 DEFAULT_REPORT_TITLE = "Compte Rendu d'Entretien Collaborateur"
 PROMPT_TITLE_MAP: dict[str, str] = {
     "entretien_collaborateur": "Compte Rendu d'Entretien Collaborateur",
@@ -255,10 +270,11 @@ def _build_html_report(
             "pypandoc is required to render HTML reports"
         ) from _PYPANDOC_IMPORT_ERROR
 
-    if not _REPORT_TEMPLATE_PATH.exists():
-        raise FileNotFoundError(f"Meeting report template missing: {_REPORT_TEMPLATE_PATH}")
+    template_path = _report_template_path()
+    if not template_path.exists():
+        raise FileNotFoundError(f"Meeting report template missing: {template_path}")
 
-    extra_args = ["--standalone", "--template", str(_REPORT_TEMPLATE_PATH)]
+    extra_args = ["--standalone", "--template", str(template_path)]
     date_value = report_date or datetime.now().strftime("%d/%m/%Y")
     extra_args.extend(["--metadata", f"date={date_value}"])
     if title:
@@ -284,14 +300,16 @@ def _render_pdf_report(
             "weasyprint is required to export meeting reports to PDF"
         ) from _WEASYPRINT_IMPORT_ERROR
 
-    if not _REPORT_CSS_PATH.exists():
-        raise FileNotFoundError(f"Meeting report CSS missing: {_REPORT_CSS_PATH}")
+    template_path = _report_template_path()
+    css_path = _report_css_path()
+    if not css_path.exists():
+        raise FileNotFoundError(f"Meeting report CSS missing: {css_path}")
 
     html_report = _build_html_report(markdown_text, title=title, report_date=report_date)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=html_report, base_url=str(_REPORT_TEMPLATE_PATH.parent)).write_pdf(
+    HTML(string=html_report, base_url=str(template_path.parent)).write_pdf(
         target=str(out_path),
-        stylesheets=[CSS(filename=str(_REPORT_CSS_PATH))],
+        stylesheets=[CSS(filename=str(css_path))],
     )
 
 

@@ -19,17 +19,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
+  meta:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
       packages: read
-
     env:
       IMAGE_REPO: xbmtb82/asr_jetson
       IMAGE_REPO_DEV: xbmtb82/asr_jetson-dev
+    outputs:
+      image_name: ${{ steps.image.outputs.image_name }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
+      branch: ${{ steps.vars.outputs.branch }}
+      vcs_ref: ${{ steps.vars.outputs.vcs_ref }}
+      build_date: ${{ steps.vars.outputs.build_date }}
+      app_version: ${{ steps.vars.outputs.app_version }}
+    steps:
+      - name: Select image repo (dev for PR, prod for tags/branches)
+        id: image
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "image_name=${{ env.IMAGE_REPO_DEV }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_name=${{ env.IMAGE_REPO }}" >> "$GITHUB_OUTPUT"
+          fi
 
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.image_name }}
+          tags: |
+            # PR => images "dev"
+            type=ref,event=pr,prefix=dev-pr-
+            type=sha,event=pr,format=short,prefix=dev-
+
+            # (optionnal) Branch
+            type=ref,event=branch
+            type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
+            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
+
+            # Release tag vX.Y.Z => tags docker X.Y.Z + latest
+            type=semver,event=tag,pattern={{version}}
+            type=raw,value=latest,event=tag
+
+      - name: Compute build vars
+        id: vars
+        shell: bash
+        run: |
+          echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "vcs_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            # Ex: v0.1.0
+            echo "app_version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            # Ex: master-<sha7> ou develop-<sha7>
+            echo "app_version=${GITHUB_REF_NAME}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-arm64:
+    runs-on: ubuntu-latest
+    needs: meta
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      digest: ${{ steps.build_arm64.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,7 +95,7 @@ jobs:
         run: |
           echo "=== Espace AVANT nettoyage ==="
           df -h
-          
+
           # Suppression des gros dossiers inutiles
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -48,26 +105,26 @@ jobs:
           sudo rm -rf /usr/local/share/boost
           sudo rm -rf /usr/local/graalvm
           sudo rm -rf /usr/local/.ghcup
-          
+
           # Nettoyage APT
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/*
-          
+
           echo "=== Espace APRÈS nettoyage initial ==="
           df -h
 
       - name: Move Docker to /mnt (large partition)
         run: |
           set -euxo pipefail
-          
+
           echo "=== Arrêt de Docker ==="
           sudo systemctl stop docker.socket || true
           sudo systemctl stop docker || true
-          
+
           # Utiliser /mnt qui a 66G disponibles
           NEW_ROOT="/mnt/docker-data"
           sudo mkdir -p "${NEW_ROOT}"
-          
+
           echo "=== Migration des données Docker existantes ==="
           if [ -d /var/lib/docker ]; then
             sudo du -sh /var/lib/docker
@@ -75,7 +132,7 @@ jobs:
             sudo rsync -a --delete /var/lib/docker/ "${NEW_ROOT}/" || true
             sudo rm -rf /var/lib/docker
           fi
-          
+
           echo "=== Configuration du nouveau data-root ==="
           echo '{
             "data-root": "'"${NEW_ROOT}"'",
@@ -83,15 +140,15 @@ jobs:
             "max-concurrent-downloads": 3,
             "max-concurrent-uploads": 3
           }' | sudo tee /etc/docker/daemon.json
-          
+
           echo "=== Redémarrage de Docker ==="
           sudo systemctl daemon-reload
           sudo systemctl start docker
-          
+
           echo "=== Vérification Docker ==="
           docker info | grep -i "docker root dir"
           docker info | grep -i "storage driver"
-          
+
           echo "=== Espace disque après migration ==="
           df -h
 
@@ -126,49 +183,6 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Select image repo (dev for PR, prod for tags/branches)
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "IMAGE_NAME=${{ env.IMAGE_REPO_DEV }}" >> $GITHUB_ENV
-          else
-            echo "IMAGE_NAME=${{ env.IMAGE_REPO }}" >> $GITHUB_ENV
-          fi
-
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            # PR => images "dev"
-            type=ref,event=pr,prefix=dev-pr-
-            type=sha,event=pr,format=short,prefix=dev-
-
-            # (optionnal) Branch
-            type=ref,event=branch
-            type=sha,format=short,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
-            type=raw,value={{branch}}-{{date 'YYYYMMDD'}},enable=${{ github.event_name != 'pull_request' && github.ref_type == 'branch' }}
-
-            # Release tag vX.Y.Z => tags docker X.Y.Z + latest
-            type=semver,event=tag,pattern={{version}}
-            type=raw,value=latest,event=tag
-
-      - name: Compute build vars
-        id: vars
-        shell: bash
-        run: |
-            echo "branch=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-            echo "vcs_ref=${GITHUB_SHA}" >> $GITHUB_OUTPUT
-            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
-            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-              # Ex: v0.1.0
-              echo "app_version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-            else
-              # Ex: master-<sha7> ou develop-<sha7>
-              echo "app_version=${GITHUB_REF_NAME}-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-            fi
-
       - name: Build & Push (arm64 - Jetson)
         id: build_arm64
         uses: docker/build-push-action@v6
@@ -177,67 +191,18 @@ jobs:
           file: ./docker/Dockerfile.jetson
           platforms: linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          sbom: false
-          # Optimisations pour réduire l'usage disque
-          cache-from: type=gha
-          cache-to: type=gha,mode=min
-          build-args: |
-            GIT_BRANCH=${{ steps.vars.outputs.branch }}
-            VCS_REF=${{ steps.vars.outputs.vcs_ref }}
-            BUILD_DATE=${{ steps.vars.outputs.build_date }}
-            APP_VERSION=${{ steps.vars.outputs.app_version }}
-            BUILDKIT_INLINE_CACHE=0
-          # Pas de build en parallèle pour économiser l'espace
-          builder: ${{ steps.buildx.outputs.name }}
-
-      - name: Build & Push (amd64)
-        id: build_amd64
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./docker/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ needs.meta.outputs.tags }}
+          labels: ${{ needs.meta.outputs.labels }}
           provenance: false
           sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=min
           build-args: |
-            GIT_BRANCH=${{ steps.vars.outputs.branch }}
-            VCS_REF=${{ steps.vars.outputs.vcs_ref }}
-            BUILD_DATE=${{ steps.vars.outputs.build_date }}
-            APP_VERSION=${{ steps.vars.outputs.app_version }}
-            ENABLE_TENSORRT=0
+            GIT_BRANCH=${{ needs.meta.outputs.branch }}
+            VCS_REF=${{ needs.meta.outputs.vcs_ref }}
+            BUILD_DATE=${{ needs.meta.outputs.build_date }}
+            APP_VERSION=${{ needs.meta.outputs.app_version }}
             BUILDKIT_INLINE_CACHE=0
-          builder: ${{ steps.buildx.outputs.name }}
-
-      - name: Publish multi-arch manifest
-        run: |
-          set -euo pipefail
-          ARM64_DIGEST="${{ steps.build_arm64.outputs.digest }}"
-          AMD64_DIGEST="${{ steps.build_amd64.outputs.digest }}"
-          IMAGE="${{ env.IMAGE_NAME }}"
-          TAGS="${{ steps.meta.outputs.tags }}"
-          echo "Arm64 digest: ${ARM64_DIGEST}"
-          echo "Amd64 digest: ${AMD64_DIGEST}"
-          echo "Tags to publish:"
-          echo "${TAGS}"
-          for tag in ${TAGS}; do
-            echo "Pushing manifest for ${tag}"
-            docker buildx imagetools create -t "${tag}" \
-              "${IMAGE}@${AMD64_DIGEST}" \
-              "${IMAGE}@${ARM64_DIGEST}"
-          done
-
-          # Sanity check on the branch tag if present
-          if echo "${TAGS}" | grep -q "${IMAGE}:${{ steps.vars.outputs.branch }}"; then
-            docker buildx imagetools inspect "${IMAGE}:${{ steps.vars.outputs.branch }}"
-          fi
 
       - name: Monitor disk usage during build
         if: always()
@@ -253,3 +218,180 @@ jobs:
           docker system prune -af --volumes
           docker builder prune -af
           df -h
+
+  build-amd64:
+    runs-on: ubuntu-latest
+    needs: meta
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      digest: ${{ steps.build_amd64.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space (aggressive cleanup first)
+        run: |
+          echo "=== Espace AVANT nettoyage ==="
+          df -h
+
+          # Suppression des gros dossiers inutiles
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/.ghcup
+
+          # Nettoyage APT
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo "=== Espace APRÈS nettoyage initial ==="
+          df -h
+
+      - name: Move Docker to /mnt (large partition)
+        run: |
+          set -euxo pipefail
+
+          echo "=== Arrêt de Docker ==="
+          sudo systemctl stop docker.socket || true
+          sudo systemctl stop docker || true
+
+          # Utiliser /mnt qui a 66G disponibles
+          NEW_ROOT="/mnt/docker-data"
+          sudo mkdir -p "${NEW_ROOT}"
+
+          echo "=== Migration des données Docker existantes ==="
+          if [ -d /var/lib/docker ]; then
+            sudo du -sh /var/lib/docker
+            # Copie rapide sans préservation d'attributs étendus qui peuvent bloquer
+            sudo rsync -a --delete /var/lib/docker/ "${NEW_ROOT}/" || true
+            sudo rm -rf /var/lib/docker
+          fi
+
+          echo "=== Configuration du nouveau data-root ==="
+          echo '{
+            "data-root": "'"${NEW_ROOT}"'",
+            "storage-driver": "overlay2",
+            "max-concurrent-downloads": 3,
+            "max-concurrent-uploads": 3
+          }' | sudo tee /etc/docker/daemon.json
+
+          echo "=== Redémarrage de Docker ==="
+          sudo systemctl daemon-reload
+          sudo systemctl start docker
+
+          echo "=== Vérification Docker ==="
+          docker info | grep -i "docker root dir"
+          docker info | grep -i "storage driver"
+
+          echo "=== Espace disque après migration ==="
+          df -h
+
+      - name: Prune Docker before build
+        run: |
+          docker system prune -af --volumes
+          docker builder prune -af
+          df -h
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+          buildkitd-flags: --debug
+
+      - name: Login to NGC
+        uses: docker/login-action@v3
+        with:
+          registry: nvcr.io
+          username: $oauthtoken
+          password: ${{ secrets.NGC_API_KEY }}
+
+      - name: Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push (amd64)
+        id: build_amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.meta.outputs.tags }}
+          labels: ${{ needs.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+          build-args: |
+            GIT_BRANCH=${{ needs.meta.outputs.branch }}
+            VCS_REF=${{ needs.meta.outputs.vcs_ref }}
+            BUILD_DATE=${{ needs.meta.outputs.build_date }}
+            APP_VERSION=${{ needs.meta.outputs.app_version }}
+            ENABLE_TENSORRT=0
+            BUILDKIT_INLINE_CACHE=0
+
+      - name: Monitor disk usage during build
+        if: always()
+        run: |
+          echo "=== Espace disque final ==="
+          df -h
+          echo "=== Taille du data-root Docker ==="
+          sudo du -sh /mnt/docker-data || true
+
+      - name: Cleanup after build
+        if: always()
+        run: |
+          docker system prune -af --volumes
+          docker builder prune -af
+          df -h
+
+  publish-manifest:
+    runs-on: ubuntu-latest
+    needs: [meta, build-arm64, build-amd64]
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Docker Hub login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Publish multi-arch manifest
+        run: |
+          set -euo pipefail
+          ARM64_DIGEST="${{ needs.build-arm64.outputs.digest }}"
+          AMD64_DIGEST="${{ needs.build-amd64.outputs.digest }}"
+          IMAGE="${{ needs.meta.outputs.image_name }}"
+          TAGS="${{ needs.meta.outputs.tags }}"
+          echo "Arm64 digest: ${ARM64_DIGEST}"
+          echo "Amd64 digest: ${AMD64_DIGEST}"
+          echo "Tags to publish:"
+          echo "${TAGS}"
+          for tag in ${TAGS}; do
+            echo "Pushing manifest for ${tag}"
+            docker buildx imagetools create -t "${tag}" \
+              "${IMAGE}@${AMD64_DIGEST}" \
+              "${IMAGE}@${ARM64_DIGEST}"
+          done
+
+          # Sanity check on the branch tag if present
+          if echo "${TAGS}" | grep -q "${IMAGE}:${{ needs.meta.outputs.branch }}"; then
+            docker buildx imagetools inspect "${IMAGE}:${{ needs.meta.outputs.branch }}"
+          fi

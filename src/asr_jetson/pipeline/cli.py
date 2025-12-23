@@ -2,9 +2,16 @@
 Command-line entry point for orchestrating the ASR Jetson pipeline.
 """
 import argparse
+import os
 from pathlib import Path
 
-from asr_jetson.pipeline.full_pipeline import PipelineConfig, run_pipeline
+from asr_jetson.pipeline.full_pipeline import (
+    PipelineConfig,
+    _build_run_id,
+    _resolve_out_root,
+    _write_manifest,
+    run_pipeline,
+)
 
 
 def main() -> None:
@@ -28,6 +35,8 @@ def main() -> None:
     p.add_argument("--monitor-gpu-memory", action="store_true",help="Print GPU memory usage at key stages of the pipeline")
     p.add_argument("--asr-prompt", type=str, default="Kleos, Pennylane, CJD, Manupro, El Moussaoui", help="Optional initial prompt sent to Faster-Whisper to bias decoding")
     p.add_argument("--speaker-context", type=str, default=None, help="Optional anonymized description of the speakers/roles to help the report (kept local)")
+    p.add_argument("--run-id", type=str, default=None, help="Optional run identifier to group outputs")
+    p.add_argument("--recordings-root", type=str, default=None, help="Optional recordings root to relativize manifest paths")
     p.add_argument(
         "--meeting-date",
         type=str,
@@ -46,6 +55,7 @@ def main() -> None:
         help="Prompt category for the meeting report (matches keys in mistral_prompts.json)",
     )
     args = p.parse_args()
+    recordings_root = args.recordings_root or os.environ.get("ASR_RECORDINGS_ROOT")
 
     cfg = PipelineConfig(
         denoise=args.denoise,
@@ -62,9 +72,36 @@ def main() -> None:
         speaker_context=args.speaker_context,
         meeting_report_prompt_key=args.meeting_report_type,
         meeting_date=args.meeting_date,
+        run_id=args.run_id,
+        recordings_root=Path(recordings_root) if recordings_root else None,
     )
-    result = run_pipeline(args.audio, cfg)
-    print("✓ pipeline done\nJSON:", result.get("json"), "\nSRT:", result.get("srt"), "\nTXT:", result.get("txt"), "\nTXT CLEANED:", result.get("txt_llm"))
+    try:
+        result = run_pipeline(args.audio, cfg)
+    except Exception as exc:
+        run_id = cfg.run_id or _build_run_id(Path(args.audio).stem)
+        try:
+            _write_manifest(
+                _resolve_out_root(cfg),
+                run_id=run_id,
+                status="failed",
+                audio_path=Path(args.audio),
+                cfg=cfg,
+                report_outputs=None,
+                error=str(exc),
+            )
+        except Exception as manifest_exc:
+            print(f"[WARN] Manifest write failed: {manifest_exc}")
+        raise
+    print(
+        "✓ pipeline done\nJSON:",
+        result.get("json"),
+        "\nSRT:",
+        result.get("srt"),
+        "\nTXT:",
+        result.get("txt"),
+        "\nTXT CLEANED:",
+        result.get("txt_llm"),
+    )
 
 if __name__ == "__main__":
     main()

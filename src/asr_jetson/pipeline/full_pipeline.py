@@ -45,6 +45,167 @@ def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _iso_from_epoch(epoch: float) -> str:
+    return datetime.utcfromtimestamp(epoch).isoformat() + "Z"
+
+
+def _now_iso() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _sanitize_run_component(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    return cleaned.strip("._") or "run"
+
+
+def _build_run_id(audio_stem: str, stamp: Optional[str] = None) -> str:
+    label = _sanitize_run_component(audio_stem)
+    timestamp = stamp or datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"{label}_{timestamp}"
+
+
+def _resolve_config_dir() -> Path:
+    default_dir = Path(__file__).resolve().parents[1] / "config"
+    env_value = os.environ.get("ASR_CONFIG_DIR")
+    if not env_value:
+        return default_dir
+    env_path = Path(env_value).expanduser()
+    if not env_path.is_absolute():
+        env_path = (Path.cwd() / env_path).resolve()
+    return env_path
+
+
+def _resolve_out_root(cfg: "PipelineConfig") -> Path:
+    root_dir = Path(__file__).resolve().parents[3]
+    out_root = cfg.out_dir
+    if not out_root.is_absolute():
+        out_root = (root_dir / out_root).resolve()
+    return out_root
+
+
+def _resolve_recordings_root(cfg: "PipelineConfig") -> Optional[Path]:
+    if cfg.recordings_root:
+        root = cfg.recordings_root
+        if not root.is_absolute():
+            root = (_resolve_out_root(cfg).parent / root).resolve()
+        return root
+    env_root = os.environ.get("ASR_RECORDINGS_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return None
+
+
+def _relative_to_root(path: Path, root: Optional[Path]) -> str:
+    if root:
+        try:
+            return str(path.resolve().relative_to(root.resolve()))
+        except ValueError:
+            pass
+    return str(path)
+
+
+def _collect_artifacts(run_root: Path, recordings_root: Optional[Path]) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    if not run_root.exists():
+        return artifacts
+    for path in sorted(run_root.rglob("*")):
+        if path.is_dir():
+            continue
+        if path.name == "manifest.json":
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        try:
+            top = path.relative_to(run_root).parts[0]
+        except ValueError:
+            top = "root"
+        artifacts.append(
+            {
+                "path": _relative_to_root(path, recordings_root),
+                "name": path.name,
+                "category": top,
+                "size": stat.st_size,
+                "mtime": _iso_from_epoch(stat.st_mtime),
+            }
+        )
+    return artifacts
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_manifest(
+    run_root: Path,
+    *,
+    run_id: str,
+    status: str,
+    audio_path: Path,
+    cfg: "PipelineConfig",
+    report_outputs: Dict[str, Optional[str]] | None = None,
+    error: Optional[str] = None,
+) -> Path:
+    recordings_root = _resolve_recordings_root(cfg)
+    manifest_path = run_root / "manifest.json"
+    existing = _load_json(manifest_path)
+    created_at = existing.get("created_at") or _now_iso()
+    meta_path = run_root / "meta.json"
+    meta = _load_json(meta_path) if meta_path.exists() else {}
+
+    audio_rel = _relative_to_root(audio_path, recordings_root)
+    user_folder = meta.get("user_folder") or (audio_rel.split("/", 1)[0] if "/" in audio_rel else "")
+    artifacts = _collect_artifacts(run_root, recordings_root)
+
+    manifest = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "status": status,
+        "created_at": created_at,
+        "updated_at": _now_iso(),
+        "user_folder": user_folder,
+        "run_root": _relative_to_root(run_root, recordings_root),
+        "audio": {
+            "path": audio_rel,
+            "saved_filename": meta.get("saved_filename"),
+            "original_filename": meta.get("original_filename"),
+        },
+        "meta": {
+            "meeting_date": meta.get("meeting_date"),
+            "meeting_report_type": meta.get("meeting_report_type"),
+            "uploaded_at": meta.get("uploaded_at"),
+            "asr_prompt": meta.get("asr_prompt"),
+            "speaker_context": meta.get("speaker_context"),
+        },
+        "pipeline": {
+            "device": cfg.device,
+            "pyannote_pipeline": cfg.pyannote_pipeline,
+            "whisper_model": cfg.whisper_model,
+            "whisper_compute": cfg.whisper_compute,
+            "language": cfg.language,
+            "denoise": cfg.denoise,
+            "anonymize": cfg.anonymize,
+            "generate_meeting_report": cfg.generate_meeting_report,
+        },
+        "report": {
+            "status": (report_outputs or {}).get("report_status") if report_outputs else None,
+            "reason": (report_outputs or {}).get("report_reason") if report_outputs else None,
+        },
+        "artifacts": artifacts,
+    }
+    if error:
+        manifest["error"] = {"message": error}
+
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
+
+
 def _format_srt_timestamp(seconds: float) -> str:
     """
     Convert a time value in seconds to an SRT timestamp string.
@@ -135,6 +296,8 @@ class PipelineConfig:
     language: Optional[str] = None     # None = auto-detect
     out_dir: Path = Path("outputs")    # where to write JSON/SRT/WAV intermediates
     monitor_gpu_memory: bool = False
+    run_id: Optional[str] = None
+    recordings_root: Optional[Path] = None
 
     anonymize: bool = True
     anon_model: str = "urchade/gliner_multi_pii-v1"
@@ -148,7 +311,7 @@ class PipelineConfig:
     anon_max_block_chars: int = 1200
     anon_max_block_sents: int = 5
     generate_meeting_report: bool = True
-    meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
+    meeting_report_prompts: Path = Path("mistral_prompts.json")
     meeting_report_prompt_key: str = "entretien_collaborateur"
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
@@ -300,14 +463,19 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     os.environ.setdefault("CT2_USE_EXPERIMENTAL_PACKED_GEMM", "1")
     os.environ.setdefault("CT2_THREADS", "1")
 
-    src_audio = Path(audio_path)
+    input_audio = Path(audio_path)
+    run_id = cfg.run_id or _build_run_id(input_audio.stem)
+    run_root = _resolve_out_root(cfg)
+    run_root.mkdir(parents=True, exist_ok=True)
+    root_dir = Path(__file__).resolve().parents[3]
 
-    # convert to wav
-    src_audio = convert_to_wav(src_audio)
+    # convert to wav (store a copy under the run directory)
+    converted_wav = run_root / "intermediate" / f"{input_audio.stem}_converted.wav"
+    src_audio = convert_to_wav(input_audio, output_path=converted_wav)
 
     # 0) Optional denoising stage to produce a clean WAV.
     if cfg.denoise:
-        denoised_wav = cfg.out_dir / "intermediate" / (src_audio.stem + "_denoised.wav")
+        denoised_wav = run_root / "intermediate" / (src_audio.stem + "_denoised.wav")
         _ensure_parent(denoised_wav)
         try:
             _apply_rnnoise(src_audio, denoised_wav, model_path=None)
@@ -328,6 +496,18 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     )
     monitor.log("after-diarization")
     if not diar_segments:
+        try:
+            _write_manifest(
+                run_root,
+                run_id=run_id,
+                status="failed",
+                audio_path=input_audio,
+                cfg=cfg,
+                report_outputs=None,
+                error="no_segments",
+            )
+        except Exception as exc:
+            print(f"[WARN] Manifest write failed: {exc}")
         return {"diarization": [], "asr": [], "labeled": []}
 
     # 2) ASR with Faster-Whisper.
@@ -364,19 +544,17 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             seg["end_s"] = float(seg.get("end", 0.0))
 
     # 4) Export artifacts.
-    _ensure_parent(cfg.out_dir / "json")
-    _ensure_parent(cfg.out_dir / "srt")
-
-    root_dir = Path(__file__).resolve().parents[3]
-    os.makedirs(os.path.join(root_dir, cfg.out_dir, "json"), exist_ok=True)
-    os.makedirs(os.path.join(root_dir, cfg.out_dir, "srt"), exist_ok=True)
-    os.makedirs(os.path.join(root_dir, cfg.out_dir, "txt"), exist_ok=True)
+    _ensure_parent(run_root / "json")
+    _ensure_parent(run_root / "srt")
+    os.makedirs(run_root / "json", exist_ok=True)
+    os.makedirs(run_root / "srt", exist_ok=True)
+    os.makedirs(run_root / "txt", exist_ok=True)
 
     diar_tag = cfg.pyannote_pipeline.split("/")[-1] if "/" in cfg.pyannote_pipeline else cfg.pyannote_pipeline
     tag = f"_pyannote_{diar_tag}_{cfg.whisper_model}".replace("/", "_")
-    out_json = root_dir / cfg.out_dir / "json" / (Path(audio_path).stem + f"{tag}.json")
-    out_srt  = root_dir / cfg.out_dir / "srt" /  (Path(audio_path).stem + f"{tag}.srt")
-    out_txt = root_dir / cfg.out_dir / "txt" / (Path(audio_path).stem + f"{tag}.txt")
+    out_json = run_root / "json" / (Path(audio_path).stem + f"{tag}.json")
+    out_srt = run_root / "srt" / (Path(audio_path).stem + f"{tag}.srt")
+    out_txt = run_root / "txt" / (Path(audio_path).stem + f"{tag}.txt")
 
     # Build the SRT payload with second-based timestamps and speaker strings.
     srt_payload = [
@@ -437,10 +615,10 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     _, txt_name = os.path.split(out_txt)
     txt_stem, _ = os.path.splitext(txt_name)
 
-    out_txt_anon = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_anon.txt"
-    out_txt_anon_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_anon_clean.txt"
-    out_txt_clean = root_dir / cfg.out_dir / "txt" / f"{txt_stem}_clean.txt"
-    out_mapping_json = root_dir / cfg.out_dir / "json" / f"{txt_stem}_anon_mapping.json"
+    out_txt_anon = run_root / "txt" / f"{txt_stem}_anon.txt"
+    out_txt_anon_clean = run_root / "txt" / f"{txt_stem}_anon_clean.txt"
+    out_txt_clean = run_root / "txt" / f"{txt_stem}_clean.txt"
+    out_mapping_json = run_root / "json" / f"{txt_stem}_anon_mapping.json"
     speaker_context_hint = (cfg.speaker_context or "").strip() or None
     speaker_context_anon: Optional[str] = None
 
@@ -521,7 +699,9 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts
         if not prompts_path.is_absolute():
-            prompts_path = (root_dir / prompts_path).resolve()
+            config_dir = _resolve_config_dir()
+            candidate = (config_dir / prompts_path).resolve()
+            prompts_path = candidate if candidate.exists() else (root_dir / prompts_path).resolve()
         if not prompts_path.exists():
             raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
 
@@ -540,7 +720,7 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             temperature=0.1,
         )
 
-        reports_dir = root_dir / cfg.out_dir / "reports"
+        reports_dir = run_root / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
         report_anon_path = reports_dir / f"{txt_stem}_meeting_report_anonymized.md"
         report_anon_path.write_text(analysis_anonymized, encoding="utf-8")
@@ -548,8 +728,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         report_outputs = generate_pdf_report(
             anonymized_markdown_path=report_anon_path,
             mapping_json_path=out_mapping_json,
-            output_dir=root_dir / cfg.out_dir,
-            run_id=txt_stem,
+            output_dir=run_root,
+            run_id=run_id,
             prompt_key=cfg.meeting_report_prompt_key,
             meeting_date=meeting_date,
             audio_stem=Path(audio_path).stem,
@@ -563,6 +743,17 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     torch.cuda.empty_cache()
     gc.collect()
     monitor.log("pipeline-end")
+    try:
+        _write_manifest(
+            run_root,
+            run_id=run_id,
+            status="ready",
+            audio_path=input_audio,
+            cfg=cfg,
+            report_outputs=report_outputs,
+        )
+    except Exception as exc:
+        print(f"[WARN] Manifest write failed: {exc}")
 
     return {
         "diarization": diar_segments,
