@@ -42,7 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
     && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && apt-get clean \
+    && rm -rf /opt/conda /root/.cache /var/cache/apt/* /tmp/* /var/tmp/* \
+    && find /usr/share/doc -depth -type f ! -name copyright -delete \
+    && find /usr/share/man -type f -delete \
+    && find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en*' -exec rm -rf {} +
 
 # Installation de uv + Python 3.11 pour aligner les dépendances avec Jetson
 ENV PATH="/root/.local/bin:${PATH}"
