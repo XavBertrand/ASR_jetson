@@ -64,6 +64,17 @@ def _build_run_id(audio_stem: str, stamp: Optional[str] = None) -> str:
     return f"{label}_{timestamp}"
 
 
+def _resolve_config_dir() -> Path:
+    default_dir = Path(__file__).resolve().parents[1] / "config"
+    env_value = os.environ.get("ASR_CONFIG_DIR")
+    if not env_value:
+        return default_dir
+    env_path = Path(env_value).expanduser()
+    if not env_path.is_absolute():
+        env_path = (Path.cwd() / env_path).resolve()
+    return env_path
+
+
 def _resolve_out_root(cfg: "PipelineConfig") -> Path:
     root_dir = Path(__file__).resolve().parents[3]
     out_root = cfg.out_dir
@@ -300,7 +311,7 @@ class PipelineConfig:
     anon_max_block_chars: int = 1200
     anon_max_block_sents: int = 5
     generate_meeting_report: bool = True
-    meeting_report_prompts: Path = Path("src/asr_jetson/config/mistral_prompts.json")
+    meeting_report_prompts: Path = Path("mistral_prompts.json")
     meeting_report_prompt_key: str = "entretien_collaborateur"
     presidio_python: Path = Path(".venv-presidio/bin/python")
     speaker_context: Optional[str] = None
@@ -688,7 +699,9 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts
         if not prompts_path.is_absolute():
-            prompts_path = (root_dir / prompts_path).resolve()
+            config_dir = _resolve_config_dir()
+            candidate = (config_dir / prompts_path).resolve()
+            prompts_path = candidate if candidate.exists() else (root_dir / prompts_path).resolve()
         if not prompts_path.exists():
             raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
 
