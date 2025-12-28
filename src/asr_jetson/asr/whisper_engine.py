@@ -26,6 +26,39 @@ def load_faster_whisper(model_name: str, device: str, compute_type: str) -> Tupl
     """
     from faster_whisper import WhisperModel
 
+    def _ctranslate2_cuda_available() -> bool:
+        try:
+            import ctranslate2
+        except Exception:
+            return False
+        if not hasattr(ctranslate2, "get_supported_compute_types"):
+            return False
+        try:
+            ctranslate2.get_supported_compute_types("cuda")
+        except Exception as exc:
+            print(f"[WARN] CTranslate2 CUDA unavailable ({exc}).")
+            return False
+        return True
+
+    def _select_supported_compute_type(device_name: str, requested: str) -> str:
+        try:
+            import ctranslate2
+        except Exception:
+            return requested
+        if not hasattr(ctranslate2, "get_supported_compute_types"):
+            return requested
+        try:
+            supported = ctranslate2.get_supported_compute_types(device_name)
+        except Exception:
+            return requested
+        if requested in supported:
+            return requested
+        for fallback in ("int8", "float32", "int16", "int8_float32"):
+            if fallback in supported:
+                print(f"[WARN] compute_type={requested} unsupported on {device_name}; using {fallback}.")
+                return fallback
+        return requested
+
     os.environ.setdefault("CT2_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -33,6 +66,11 @@ def load_faster_whisper(model_name: str, device: str, compute_type: str) -> Tupl
 
     os.environ.setdefault("CT2_USE_MMAP", "1")
     os.environ.setdefault("CT2_BEAM_SIZE", "5")
+
+    if device == "cuda" and not _ctranslate2_cuda_available():
+        print("[WARN] Requested CUDA for Faster-Whisper but CTranslate2 has no CUDA support.")
+        device = "cpu"
+    compute_type = _select_supported_compute_type(device, compute_type)
 
     try:
         model = WhisperModel(
