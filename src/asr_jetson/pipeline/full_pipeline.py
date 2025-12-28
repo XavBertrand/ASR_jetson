@@ -427,7 +427,11 @@ def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
         # Reasonable fallback on GPU.
         return "float16"
     else:
-        # CPU: int8/float32 (float16 when available, though rarely necessary).
+        # CPU: prefer int8/float32; map GPU-only types to a safe fallback.
+        if ct in ("int8_float16",):
+            return "int8"
+        if ct in ("float16",):
+            return "float32"
         return ct or "int8"
 
 

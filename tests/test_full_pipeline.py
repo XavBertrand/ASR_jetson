@@ -32,14 +32,23 @@ def test_full_pipeline_end_to_end(tmp_path):
     if not audio_path.exists():
         pytest.skip("tests/data/test.mp3 manquant — on skip l'intégration.")
 
-    # Config "safe" pour CI : CPU, denoise désactivé (évite soucis ffmpeg/arnndn)
+    # Config "safe" pour CI : modèle léger, device auto, denoise désactivé.
+    try:
+        import torch
+        use_cuda = torch.cuda.is_available()
+    except Exception:
+        use_cuda = False
+
+    device = "cuda" if use_cuda else "cpu"
+    compute_type = "int8_float16" if device == "cuda" else "int8"
+
     out_dir = tmp_path / "outputs"
     cfg = PipelineConfig(
         denoise=False,
-        device="cuda",
+        device=device,
         n_speakers=1,
-        whisper_model="medium",
-        whisper_compute="int8_float16",  # <--- clé : compatible CUDA
+        whisper_model="tiny",
+        whisper_compute=compute_type,
         language=None,
         out_dir=out_dir,
     )

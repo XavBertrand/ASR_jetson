@@ -41,7 +41,19 @@ def test_asr_on_real_file_and_attach_speakers():
 
     # 2) ASR
     try:
-        model, _meta = load_faster_whisper(model_name="tiny", device="cuda", compute_type="float16")
+        try:
+            import torch
+            use_cuda = torch.cuda.is_available()
+        except Exception:
+            use_cuda = False
+
+        device = "cuda" if use_cuda else "cpu"
+        compute_type = "int8_float16" if device == "cuda" else "int8"
+        model, _meta = load_faster_whisper(
+            model_name="tiny",
+            device=device,
+            compute_type=compute_type,
+        )
     except Exception as e:
         pytest.skip(f"faster-whisper indisponible : {e}")
 
