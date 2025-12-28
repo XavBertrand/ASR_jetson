@@ -133,6 +133,22 @@ def _collect_artifacts(run_root: Path, recordings_root: Optional[Path]) -> List[
     return artifacts
 
 
+def _find_existing_transcript(run_root: Path) -> Path:
+    txt_dir = run_root / "txt"
+    if not txt_dir.is_dir():
+        raise FileNotFoundError(f"Transcript directory not found: {txt_dir}")
+    candidates: List[Path] = []
+    for path in txt_dir.glob("*.txt"):
+        name = path.name.lower()
+        if name.endswith("_anon.txt") or name.endswith("_anon_clean.txt") or name.endswith("_clean.txt"):
+            continue
+        candidates.append(path)
+    if not candidates:
+        raise FileNotFoundError(f"No transcript TXT found in {txt_dir}")
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -190,6 +206,7 @@ def _write_manifest(
             "whisper_compute": cfg.whisper_compute,
             "language": cfg.language,
             "denoise": cfg.denoise,
+            "report_only": cfg.report_only,
             "anonymize": cfg.anonymize,
             "generate_meeting_report": cfg.generate_meeting_report,
         },
@@ -299,6 +316,7 @@ class PipelineConfig:
     run_id: Optional[str] = None
     recordings_root: Optional[Path] = None
 
+    report_only: bool = False
     anonymize: bool = True
     anon_model: str = "urchade/gliner_multi_pii-v1"
     anon_device: str = "auto"  # "auto" | "cpu" | "cuda"
@@ -409,7 +427,11 @@ def _sanitize_whisper_compute(device: str, compute_type: str) -> str:
         # Reasonable fallback on GPU.
         return "float16"
     else:
-        # CPU: int8/float32 (float16 when available, though rarely necessary).
+        # CPU: prefer int8/float32; map GPU-only types to a safe fallback.
+        if ct in ("int8_float16",):
+            return "int8"
+        if ct in ("float16",):
+            return "float32"
         return ct or "int8"
 
 
@@ -434,6 +456,223 @@ def _resolve_transformers_device(device_pref: str) -> int:
         return 0 if torch.cuda.is_available() else -1
 
 
+def _run_postprocessing(
+    *,
+    base_text_path: Path,
+    run_root: Path,
+    cfg: PipelineConfig,
+    audio_path: Path,
+    run_id: str,
+    meeting_date: str,
+    run_time_label: str,
+    allow_transcript_update: bool = True,
+) -> tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]:
+    if not base_text_path.exists():
+        raise FileNotFoundError(f"Transcript file not found: {base_text_path}")
+
+    root_dir = Path(__file__).resolve().parents[3]
+    out_txt = base_text_path
+    txt_stem = out_txt.stem
+    out_txt_anon = run_root / "txt" / f"{txt_stem}_anon.txt"
+    out_txt_anon_clean = run_root / "txt" / f"{txt_stem}_anon_clean.txt"
+    out_txt_clean = run_root / "txt" / f"{txt_stem}_clean.txt"
+    out_mapping_json = run_root / "json" / f"{txt_stem}_anon_mapping.json"
+
+    out_txt_anon.parent.mkdir(parents=True, exist_ok=True)
+    out_mapping_json.parent.mkdir(parents=True, exist_ok=True)
+
+    speaker_context_hint = (cfg.speaker_context or "").strip() or None
+    speaker_context_anon: Optional[str] = None
+
+    report_outputs: Dict[str, Optional[str]] = {
+        "report_anonymized_txt": None,
+        "report_txt": None,
+        "report_docx": None,
+        "report_markdown": None,
+        "report_pdf": None,
+        "report_status": "disabled",
+        "report_reason": "Meeting report generation disabled in configuration.",
+    }
+
+    base_text = out_txt.read_text(encoding="utf-8")
+
+    if cfg.anonymize:
+        domain_entities: Dict[str, List[str]] = {}
+        if cfg.anon_catalog:
+            catalog_path = Path(cfg.anon_catalog)
+            if not catalog_path.is_absolute():
+                catalog_path = (root_dir / catalog_path).resolve()
+            entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
+            tmp: Dict[str, Set[str]] = {}
+            for entry in entries:
+                pattern = entry.get("pattern") or ""
+                if not pattern.strip():
+                    continue
+                label = entry.get("label") or cfg.anon_catalog_label
+                if cfg.anon_catalog_as_person:
+                    label = "PERSON"
+                normalized = TransformerAnonymizer._normalize_type(label)
+                tmp.setdefault(normalized, set()).add(pattern.strip())
+            domain_entities = {label: sorted(values) for label, values in tmp.items() if values}
+
+        anonymizer = TransformerAnonymizer(
+            model_name=cfg.anon_model,
+            domain_entities=domain_entities or None,
+            device=_resolve_transformers_device(cfg.anon_device),
+        )
+        anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
+
+        if speaker_context_hint:
+            context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
+            mapping = _merge_anonymization_mappings(mapping, context_mapping)
+            speaker_context_anon = context_anonymized
+
+        corrected_text = mapping.get("corrected_text")
+        if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
+            base_text = corrected_text
+            if allow_transcript_update:
+                out_txt.write_text(base_text, encoding="utf-8")
+        out_txt_clean.write_text(base_text, encoding="utf-8")
+
+        out_txt_anon.write_text(anonymized_text, encoding="utf-8")
+
+        if cfg.anon_enable_llm_qc:
+            try:
+                clean_text_with_llm(out_txt_anon, out_txt_anon_clean)
+            except Exception as exc:  # pragma: no cover - depends on external services
+                print(f"⚠️ LLM clean-up failed: {exc}")
+                out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
+        else:
+            out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
+
+        out_mapping_json.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    else:
+        # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
+        out_txt_anon.write_text(base_text, encoding="utf-8")
+        out_txt_anon_clean.write_text(base_text, encoding="utf-8")
+        out_mapping_json.write_text("{}", encoding="utf-8")
+        out_txt_clean.write_text(base_text, encoding="utf-8")
+        if speaker_context_hint:
+            speaker_context_anon = speaker_context_hint
+
+    if cfg.generate_meeting_report:
+        prompts_path = cfg.meeting_report_prompts
+        if not prompts_path.is_absolute():
+            config_dir = _resolve_config_dir()
+            candidate = (config_dir / prompts_path).resolve()
+            prompts_path = candidate if candidate.exists() else (root_dir / prompts_path).resolve()
+        if not prompts_path.exists():
+            raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
+
+        prompt = mistral_client.load_prompts(str(prompts_path), key=cfg.meeting_report_prompt_key)
+        anonymized_payload = out_txt_anon_clean.read_text(encoding="utf-8")
+        if speaker_context_anon:
+            anonymized_payload = (
+                f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
+                + anonymized_payload
+            )
+        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date)
+        analysis_anonymized = mistral_client.chat_complete(
+            model=prompt.model,
+            system=prompt.system,
+            user_text=user_prefix + anonymized_payload,
+            temperature=0.1,
+        )
+
+        reports_dir = run_root / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_anon_path = reports_dir / f"{txt_stem}_meeting_report_anonymized.md"
+        report_anon_path.write_text(analysis_anonymized, encoding="utf-8")
+
+        report_outputs = generate_pdf_report(
+            anonymized_markdown_path=report_anon_path,
+            mapping_json_path=out_mapping_json,
+            output_dir=run_root,
+            run_id=run_id,
+            prompt_key=cfg.meeting_report_prompt_key,
+            meeting_date=meeting_date,
+            audio_stem=Path(audio_path).stem,
+            run_time=run_time_label,
+        )
+        # Preserve legacy keys expected by callers.
+        report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))
+        report_outputs.setdefault("report_txt", None)
+        report_outputs.setdefault("report_docx", None)
+
+    outputs = {
+        "txt": str(out_txt),
+        "txt_anon": str(out_txt_anon) if cfg.anonymize else None,
+        "txt_anon_llm": str(out_txt_anon_clean) if cfg.anonymize else None,
+        "txt_llm": str(out_txt_clean),
+        "anon_mapping": str(out_mapping_json) if cfg.anonymize else None,
+        **report_outputs,
+    }
+    return outputs, report_outputs
+
+
+def _run_report_only(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
+    device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
+    monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
+    monitor.log("report-only-start")
+
+    run_ts = datetime.now()
+    run_time_label = run_ts.strftime("%H%M%S")
+
+    input_audio = Path(audio_path)
+    run_root = _resolve_out_root(cfg)
+    if not run_root.is_dir():
+        raise FileNotFoundError(f"Run output directory not found: {run_root}")
+
+    manifest_data = _load_json(run_root / "manifest.json")
+    run_id = cfg.run_id or manifest_data.get("run_id") or run_root.name
+    meta_data = _load_json(run_root / "meta.json")
+    meeting_date_hint = meta_data.get("meeting_date") if isinstance(meta_data, dict) else None
+    meeting_date = (
+        (cfg.meeting_date or meeting_date_hint or run_ts.strftime("%Y-%m-%d")).strip()
+        or run_ts.strftime("%Y-%m-%d")
+    )
+
+    out_txt = _find_existing_transcript(run_root)
+    outputs, report_outputs = _run_postprocessing(
+        base_text_path=out_txt,
+        run_root=run_root,
+        cfg=cfg,
+        audio_path=input_audio,
+        run_id=run_id,
+        meeting_date=meeting_date,
+        run_time_label=run_time_label,
+        allow_transcript_update=False,
+    )
+
+    out_json = run_root / "json" / f"{out_txt.stem}.json"
+    out_srt = run_root / "srt" / f"{out_txt.stem}.srt"
+
+    torch.cuda.empty_cache()
+    gc.collect()
+    monitor.log("report-only-end")
+    try:
+        _write_manifest(
+            run_root,
+            run_id=run_id,
+            status="ready",
+            audio_path=input_audio,
+            cfg=cfg,
+            report_outputs=report_outputs,
+        )
+    except Exception as exc:
+        print(f"[WARN] Manifest write failed: {exc}")
+
+    return {
+        "json": str(out_json) if out_json.exists() else None,
+        "srt": str(out_srt) if out_srt.exists() else None,
+        **outputs,
+    }
+
+
 def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
     """
     Execute the full ASR pipeline: optional denoising, diarization, ASR decoding,
@@ -446,6 +685,9 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     :returns: Dictionary containing intermediate segments and output artifact paths.
     :rtype: Dict[str, Any]
     """
+    if cfg.report_only:
+        return _run_report_only(audio_path, cfg)
+
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
     monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
     monitor.log("pipeline-start")
@@ -467,7 +709,6 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     run_id = cfg.run_id or _build_run_id(input_audio.stem)
     run_root = _resolve_out_root(cfg)
     run_root.mkdir(parents=True, exist_ok=True)
-    root_dir = Path(__file__).resolve().parents[3]
 
     # convert to wav (store a copy under the run directory)
     converted_wav = run_root / "intermediate" / f"{input_audio.stem}_converted.wav"
@@ -612,133 +853,15 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     write_dialogue_txt(labeled_for_txt, out_txt)
 
     # === POST: Anonymisation / Clean / Report ===
-    _, txt_name = os.path.split(out_txt)
-    txt_stem, _ = os.path.splitext(txt_name)
-
-    out_txt_anon = run_root / "txt" / f"{txt_stem}_anon.txt"
-    out_txt_anon_clean = run_root / "txt" / f"{txt_stem}_anon_clean.txt"
-    out_txt_clean = run_root / "txt" / f"{txt_stem}_clean.txt"
-    out_mapping_json = run_root / "json" / f"{txt_stem}_anon_mapping.json"
-    speaker_context_hint = (cfg.speaker_context or "").strip() or None
-    speaker_context_anon: Optional[str] = None
-
-    report_outputs: Dict[str, Optional[str]] = {
-        "report_anonymized_txt": None,
-        "report_txt": None,
-        "report_docx": None,
-        "report_markdown": None,
-        "report_pdf": None,
-        "report_status": "disabled",
-        "report_reason": "Meeting report generation disabled in configuration.",
-    }
-
-    base_text = out_txt.read_text(encoding="utf-8")
-
-    if cfg.anonymize:
-        domain_entities: Dict[str, List[str]] = {}
-        if cfg.anon_catalog:
-            catalog_path = Path(cfg.anon_catalog)
-            if not catalog_path.is_absolute():
-                catalog_path = (root_dir / catalog_path).resolve()
-            entries = load_catalog(catalog_path, default_label=cfg.anon_catalog_label)
-            tmp: Dict[str, Set[str]] = {}
-            for entry in entries:
-                pattern = entry.get("pattern") or ""
-                if not pattern.strip():
-                    continue
-                label = entry.get("label") or cfg.anon_catalog_label
-                if cfg.anon_catalog_as_person:
-                    label = "PERSON"
-                normalized = TransformerAnonymizer._normalize_type(label)
-                tmp.setdefault(normalized, set()).add(pattern.strip())
-            domain_entities = {label: sorted(values) for label, values in tmp.items() if values}
-
-        anonymizer = TransformerAnonymizer(
-            model_name=cfg.anon_model,
-            domain_entities=domain_entities or None,
-            device=_resolve_transformers_device(cfg.anon_device),
-        )
-        anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
-
-        if speaker_context_hint:
-            context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
-            mapping = _merge_anonymization_mappings(mapping, context_mapping)
-            speaker_context_anon = context_anonymized
-
-        corrected_text = mapping.get("corrected_text")
-        if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
-            base_text = corrected_text
-            out_txt.write_text(base_text, encoding="utf-8")
-        out_txt_clean.write_text(base_text, encoding="utf-8")
-
-        out_txt_anon.write_text(anonymized_text, encoding="utf-8")
-
-        if cfg.anon_enable_llm_qc:
-            try:
-                clean_text_with_llm(out_txt_anon, out_txt_anon_clean)
-            except Exception as exc:  # pragma: no cover - depends on external services
-                print(f"⚠️ LLM clean-up failed: {exc}")
-                out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
-        else:
-            out_txt_anon_clean.write_text(anonymized_text, encoding="utf-8")
-
-        out_mapping_json.write_text(
-            json.dumps(mapping, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-    else:
-        # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
-        out_txt_anon.write_text(base_text, encoding="utf-8")
-        out_txt_anon_clean.write_text(base_text, encoding="utf-8")
-        out_mapping_json.write_text("{}", encoding="utf-8")
-        out_txt_clean.write_text(base_text, encoding="utf-8")
-        if speaker_context_hint:
-            speaker_context_anon = speaker_context_hint
-
-    if cfg.generate_meeting_report:
-        prompts_path = cfg.meeting_report_prompts
-        if not prompts_path.is_absolute():
-            config_dir = _resolve_config_dir()
-            candidate = (config_dir / prompts_path).resolve()
-            prompts_path = candidate if candidate.exists() else (root_dir / prompts_path).resolve()
-        if not prompts_path.exists():
-            raise FileNotFoundError(f"Mistral prompts file not found: {prompts_path}")
-
-        prompt = mistral_client.load_prompts(str(prompts_path), key=cfg.meeting_report_prompt_key)
-        anonymized_payload = out_txt_anon_clean.read_text(encoding="utf-8")
-        if speaker_context_anon:
-            anonymized_payload = (
-                f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
-                + anonymized_payload
-            )
-        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date)
-        analysis_anonymized = mistral_client.chat_complete(
-            model=prompt.model,
-            system=prompt.system,
-            user_text=user_prefix + anonymized_payload,
-            temperature=0.1,
-        )
-
-        reports_dir = run_root / "reports"
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        report_anon_path = reports_dir / f"{txt_stem}_meeting_report_anonymized.md"
-        report_anon_path.write_text(analysis_anonymized, encoding="utf-8")
-
-        report_outputs = generate_pdf_report(
-            anonymized_markdown_path=report_anon_path,
-            mapping_json_path=out_mapping_json,
-            output_dir=run_root,
-            run_id=run_id,
-            prompt_key=cfg.meeting_report_prompt_key,
-            meeting_date=meeting_date,
-            audio_stem=Path(audio_path).stem,
-            run_time=run_time_label,
-        )
-        # Preserve legacy keys expected by callers.
-        report_outputs.setdefault("report_anonymized_txt", str(report_anon_path))
-        report_outputs.setdefault("report_txt", None)
-        report_outputs.setdefault("report_docx", None)
+    post_outputs, report_outputs = _run_postprocessing(
+        base_text_path=out_txt,
+        run_root=run_root,
+        cfg=cfg,
+        audio_path=input_audio,
+        run_id=run_id,
+        meeting_date=meeting_date,
+        run_time_label=run_time_label,
+    )
 
     torch.cuda.empty_cache()
     gc.collect()
@@ -761,10 +884,5 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "labeled": labeled,
         "json": str(out_json),
         "srt": str(out_srt),
-        "txt": str(out_txt),
-        "txt_anon": str(out_txt_anon) if cfg.anonymize else None,
-        "txt_anon_llm": str(out_txt_anon_clean) if cfg.anonymize else None,
-        "txt_llm": str(out_txt_clean),
-        "anon_mapping": str(out_mapping_json) if cfg.anonymize else None,
-        **report_outputs,
+        **post_outputs,
     }
