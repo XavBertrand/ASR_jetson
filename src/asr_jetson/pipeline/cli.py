@@ -37,6 +37,7 @@ def main() -> None:
     p.add_argument("--speaker-context", type=str, default=None, help="Optional anonymized description of the speakers/roles to help the report (kept local)")
     p.add_argument("--run-id", type=str, default=None, help="Optional run identifier to group outputs")
     p.add_argument("--recordings-root", type=str, default=None, help="Optional recordings root to relativize manifest paths")
+    p.add_argument("--report-only", action="store_true", help="Only regenerate the anonymization/report using existing transcripts")
     p.add_argument(
         "--meeting-date",
         type=str,
@@ -74,6 +75,7 @@ def main() -> None:
         meeting_date=args.meeting_date,
         run_id=args.run_id,
         recordings_root=Path(recordings_root) if recordings_root else None,
+        report_only=args.report_only,
     )
     try:
         result = run_pipeline(args.audio, cfg)
