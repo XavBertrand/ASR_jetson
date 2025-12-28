@@ -616,17 +616,21 @@ def _run_report_only(audio_path: str | os.PathLike[str], cfg: PipelineConfig) ->
     monitor.log("report-only-start")
 
     run_ts = datetime.now()
-    meeting_date = (
-        (cfg.meeting_date or run_ts.strftime("%Y-%m-%d")).strip()
-        or run_ts.strftime("%Y-%m-%d")
-    )
     run_time_label = run_ts.strftime("%H%M%S")
 
     input_audio = Path(audio_path)
-    run_id = cfg.run_id or _build_run_id(input_audio.stem)
     run_root = _resolve_out_root(cfg)
     if not run_root.is_dir():
         raise FileNotFoundError(f"Run output directory not found: {run_root}")
+
+    manifest_data = _load_json(run_root / "manifest.json")
+    run_id = cfg.run_id or manifest_data.get("run_id") or run_root.name
+    meta_data = _load_json(run_root / "meta.json")
+    meeting_date_hint = meta_data.get("meeting_date") if isinstance(meta_data, dict) else None
+    meeting_date = (
+        (cfg.meeting_date or meeting_date_hint or run_ts.strftime("%Y-%m-%d")).strip()
+        or run_ts.strftime("%Y-%m-%d")
+    )
 
     out_txt = _find_existing_transcript(run_root)
     outputs, report_outputs = _run_postprocessing(
