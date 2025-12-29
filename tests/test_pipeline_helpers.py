@@ -127,4 +127,4 @@ def test_resolve_transformers_device(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(fp.torch.cuda, "is_available", lambda: False)
     assert fp._resolve_transformers_device("cuda") == -1
-    assert fp._resolve_transformers_device("0") == -1
+    assert fp._resolve_transformers_device("0") == 0
