@@ -96,7 +96,7 @@ wheels = [
 
 [[package]]
 name = "asr-jetson"
-version = "0.1.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "audioread", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -117,6 +117,7 @@ dependencies = [
     { name = "pypandoc", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pypandoc-binary", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pytest", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pytest-cov", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "python-docx", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "pyyaml", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "rapidfuzz", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -189,6 +190,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.3.0" },
     { name = "python-docx", specifier = ">=1.2.0" },

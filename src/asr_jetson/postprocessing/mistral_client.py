@@ -14,9 +14,15 @@ class MistralPrompt:
     system: str
     user_prefix: str
 
-def load_prompts(path: str, key: str = "meeting_analysis") -> MistralPrompt:
+def load_prompts(path: str, key: str = "entretien_collaborateur") -> MistralPrompt:
     with open(path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)[key]
+        prompts = json.load(f)
+    if key not in prompts and key == "meeting_analysis":
+        key = "entretien_collaborateur"
+    if key not in prompts:
+        available = ", ".join(sorted(prompts.keys()))
+        raise KeyError(f"Prompt key '{key}' not found in {path}. Available: {available}")
+    cfg = prompts[key]
     return MistralPrompt(model=cfg["model"], system=cfg["system"], user_prefix=cfg["user_prefix"])
 
 def chat_complete(
