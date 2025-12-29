@@ -96,6 +96,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 
 # Copier uniquement le code utile au runtime
 COPY scripts ./scripts
+RUN chmod +x /workspace/scripts/entrypoint.sh
 
 # Préparer les répertoires de cache alignés avec l'image Jetson
 RUN mkdir -p /workspace/.cache/huggingface /workspace/.cache/torch
@@ -135,4 +136,5 @@ RUN /usr/local/bin/check-gpu
 RUN mkdir -p outputs
 
 # Commande par défaut
+ENTRYPOINT ["/usr/bin/tini", "--", "/workspace/scripts/entrypoint.sh"]
 CMD ["python", "scripts/run_asr_pipeline.py", "--help"]
