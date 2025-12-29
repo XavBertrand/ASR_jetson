@@ -67,6 +67,7 @@ dependencies = [
   "pypandoc>=1.15",
   "gliner>=0.2.22",
   "weasyprint>=67.0",
+  "pytest-cov>=7.0.0",
 ]
 
 [project.optional-dependencies]
