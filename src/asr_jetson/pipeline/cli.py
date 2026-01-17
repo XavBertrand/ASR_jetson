@@ -52,6 +52,8 @@ def main() -> None:
             "entretien_client_particulier_contentieux",
             "entretien_client_professionnel_conseil",
             "entretien_client_professionnel_contentieux",
+            "compte_rendu_association",
+
         ],
         help="Prompt category for the meeting report (matches keys in mistral_prompts.json)",
     )
