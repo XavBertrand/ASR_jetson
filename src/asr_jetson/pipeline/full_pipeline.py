@@ -328,6 +328,7 @@ class PipelineConfig:
     anon_enable_llm_qc: bool = True
     anon_max_block_chars: int = 1200
     anon_max_block_sents: int = 5
+    anon_preserve_dates: bool = True
     generate_meeting_report: bool = True
     meeting_report_prompts: Path = Path("mistral_prompts.json")
     meeting_report_prompt_key: str = "entretien_collaborateur"
@@ -518,6 +519,7 @@ def _run_postprocessing(
         anonymizer = TransformerAnonymizer(
             model_name=cfg.anon_model,
             domain_entities=domain_entities or None,
+            preserve_dates=cfg.anon_preserve_dates,
             device=_resolve_transformers_device(cfg.anon_device),
         )
         anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
