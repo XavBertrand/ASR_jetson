@@ -92,8 +92,11 @@ COPY pyproject.toml README.md ./
 COPY ./src ./src
 
 # Installation avec nettoyage immédiat et agressif
+# Forcer PyAV < 14 sur Jetson (FFmpeg 6)
+RUN printf "av<14\n" > /tmp/uv-constraints.txt
+ENV PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache -e ".[tensorrt]" language-tool-python && \
+    uv pip install --no-cache --constraints /tmp/uv-constraints.txt -e ".[tensorrt]" language-tool-python && \
     rm -rf /tmp/* /var/tmp/*
 
 # Torch/CUDA (JetPack) already provided by base image; Pyannote 3.x installed via project deps.
