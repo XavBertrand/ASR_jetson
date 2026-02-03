@@ -70,7 +70,7 @@ jobs:
           PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: |
           # Si tu utilises uv.lock, garde --frozen. Sinon retire-le.
-          uv sync --frozen --extra dev
+          uv sync --frozen --extra dev --python .venv/bin/python --no-build-package av
 
       - name: Print environment
         run: |
