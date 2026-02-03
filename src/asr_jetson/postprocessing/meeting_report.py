@@ -236,8 +236,8 @@ def _normalize_mapping(mapping: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _NAME_SEQUENCE_RE = re.compile(
-    r"\\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[\\-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?"
-    r"(?:\\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[\\-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?){0,2}\\b"
+    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?"
+    r"(?:\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?){0,2}\b"
 )
 _COMMON_REPORT_WORDS = {
     "compte", "rendu", "entretien", "client", "collaborateur", "association",
