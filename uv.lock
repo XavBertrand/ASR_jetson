@@ -160,6 +160,7 @@ gpu-linux = [
 [package.metadata]
 requires-dist = [
     { name = "audioread", specifier = ">=3.0.1" },
+    { name = "av", marker = "platform_system == 'Linux' and platform_machine == 'aarch64'", specifier = "<14" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "ctranslate2", specifier = ">=4.4.0" },
     { name = "docx-python", specifier = ">=0.1.0" },

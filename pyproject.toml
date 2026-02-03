@@ -41,6 +41,7 @@ dependencies = [
   # Jetson Linux aarch64
   "torch>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "torchaudio>=2.0.0; platform_system == 'Linux' and platform_machine == 'aarch64'",
+  "av<14; platform_system == 'Linux' and platform_machine == 'aarch64'",
   "language-tool-python>=2.9.4",
   "python-docx>=1.2.0",
   "pytest>=8.4.2",
