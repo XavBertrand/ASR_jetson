@@ -41,15 +41,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     nvidia-utils-535 \
     openjdk-21-jre-headless \
-    build-essential \
-    pkg-config \
-    libavcodec-dev \
-    libavformat-dev \
-    libavdevice-dev \
-    libavutil-dev \
-    libavfilter-dev \
-    libswscale-dev \
-    libswresample-dev \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
@@ -91,7 +82,7 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv sync --frozen --extra gpu-linux --python /opt/venv/bin/python; \
+    uv sync --frozen --extra gpu-linux --python /opt/venv/bin/python --no-build-package av; \
     uv pip install --no-cache-dir -e . --no-deps --python /opt/venv/bin/python; \
     if [ "${ENABLE_TENSORRT}" = "1" ]; then \
         uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \

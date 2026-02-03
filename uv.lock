@@ -100,6 +100,7 @@ version = "0.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "audioread", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "av", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "ctranslate2", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "docx-python", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "faster-whisper", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -161,6 +162,7 @@ gpu-linux = [
 requires-dist = [
     { name = "audioread", specifier = ">=3.0.1" },
     { name = "av", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'arm64' and sys_platform == 'linux')", specifier = "<14" },
+    { name = "av", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==16.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "ctranslate2", specifier = ">=4.4.0" },
     { name = "docx-python", specifier = ">=0.1.0" },
@@ -257,9 +259,13 @@ wheels = [
 
 [[package]]
 name = "av"
-version = "14.4.0"
+version = "16.1.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/86/f6/0b473dab52dfdea05f28f3578b1c56b6c796ce85e76951bab7c4e38d5a74/av-14.4.0.tar.gz", hash = "sha256:3ecbf803a7fdf67229c0edada0830d6bfaea4d10bfb24f0c3f4e607cd1064b42", size = 3892203, upload-time = "2025-05-16T19:13:35.737Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/78/cd/3a83ffbc3cc25b39721d174487fb0d51a76582f4a1703f98e46170ce83d4/av-16.1.0.tar.gz", hash = "sha256:a094b4fd87a3721dacf02794d3d2c82b8d712c85b9534437e82a8a978c175ffd", size = 4285203, upload-time = "2026-01-11T07:31:33.772Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/31/fc62b9fe8738d2693e18d99f040b219e26e8df894c10d065f27c6b4f07e3/av-16.1.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c7f2bc703d0df260a1fdf4de4253c7f5500ca9fc57772ea241b0cb241bcf972e", size = 40846822, upload-time = "2026-01-09T20:18:24.275Z" },
+    { url = "https://files.pythonhosted.org/packages/31/d7/1003be685277005f6d63fd9e64904ee222fe1f7a0ea70af313468bb597db/av-16.1.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:441892be28582356d53f282873c5a951592daaf71642c7f20165e3ddcb0b4c63", size = 42015955, upload-time = "2026-01-09T20:18:29.461Z" },
+]
 
 [[package]]
 name = "black"
