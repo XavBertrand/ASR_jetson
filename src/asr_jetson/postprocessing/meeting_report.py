@@ -70,6 +70,7 @@ PROMPT_TITLE_MAP: dict[str, str] = {
     "entretien_client_particulier_contentieux": "Compte Rendu d'Entretien Client",
     "entretien_client_professionnel_conseil": "Compte Rendu d'Entretien Client",
     "entretien_client_professionnel_contentieux": "Compte Rendu d'Entretien Client",
+    "compte_rendu_association": "Compte Rendu Association",
 }
 _LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
 _LT_DISABLED = (os.getenv("DISABLE_LANGUAGETOOL") or "").strip().lower() in {
