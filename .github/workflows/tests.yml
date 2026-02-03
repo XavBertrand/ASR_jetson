@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   tests:
-    name: Python 3.10 • Ubuntu
+    name: Python 3.11 • Ubuntu
     runs-on: ubuntu-latest
     env:
       # ✅ Ajout clé : rendre le dossier racine importable → "src" devient visible
@@ -41,7 +41,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       # 🧰 Cache uv + venv pour accélérer les CI suivantes
       - name: Cache uv + venv
@@ -50,7 +50,7 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: uv-${{ runner.os }}-py310-${{ hashFiles('pyproject.toml', 'uv.lock', 'poetry.lock', 'requirements.txt') }}
+          key: uv-${{ runner.os }}-py311-${{ hashFiles('pyproject.toml', 'uv.lock', 'poetry.lock', 'requirements.txt') }}
 
       - name: Install uv
         run: |
