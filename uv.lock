@@ -96,7 +96,7 @@ wheels = [
 
 [[package]]
 name = "asr-jetson"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "audioread", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -156,14 +156,11 @@ gpu-linux = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchaudio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
-media = [
-    { name = "av", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "audioread", specifier = ">=3.0.1" },
-    { name = "av", marker = "extra == 'media'", specifier = ">=13,<15" },
+    { name = "av", marker = "platform_system == 'Linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')", specifier = "<14" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "ctranslate2", specifier = ">=4.4.0" },
     { name = "docx-python", specifier = ">=0.1.0" },
@@ -224,7 +221,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.24.0" },
     { name = "weasyprint", specifier = ">=67.0" },
 ]
-provides-extras = ["dev", "api", "tensorrt", "media", "gpu-win", "gpu-linux", "gpu-jetson"]
+provides-extras = ["dev", "api", "tensorrt", "gpu-win", "gpu-linux", "gpu-jetson"]
 
 [[package]]
 name = "asteroid-filterbanks"

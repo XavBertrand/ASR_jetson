@@ -11,7 +11,13 @@ from rapidfuzz import fuzz
 from unidecode import unidecode
 from transformers import pipeline
 
-from asr_jetson.postprocessing.anonymizer import EMAIL_RE, IBAN_RE, PHONE_RE, SIREN_SIRET_RE
+from asr_jetson.postprocessing.anonymizer import (
+    DATE_RE,
+    EMAIL_RE,
+    IBAN_RE,
+    PHONE_RE,
+    SIREN_SIRET_RE,
+)
 try:
     import torch  # type: ignore
 except ImportError:  # pragma: no cover
@@ -206,6 +212,7 @@ class TransformerAnonymizer:
         whitelist: List[str] | None = None,
         domain_entities: Dict[str, List[str]] | None = None,
         device: int | str | None = "cuda",
+        preserve_dates: bool = True,
     ):
         """
         Args:
@@ -218,8 +225,10 @@ class TransformerAnonymizer:
             domain_entities: Dictionnaire {"PERSON": [...], "ORG": [...]}
                            d'entités connues de ton domaine
             device: Index ou hint ("cuda", "cpu", "auto") pour l'exécution du modèle
+            preserve_dates: Conserver les dates telles quelles dans le texte anonymisé
         """
         self.model_name = model_name
+        self.preserve_dates = preserve_dates
         self.device_index = _resolve_device_index(device)
         self.use_gliner = "gliner" in model_name.lower()
         if self.use_gliner and GLiNER is None:
@@ -240,6 +249,8 @@ class TransformerAnonymizer:
             "username",
             "url",
         ]
+        if self.preserve_dates:
+            self.gliner_labels = [label for label in self.gliner_labels if label != "date"]
         self.gliner_threshold = 0.35
         self.pseudonyms = PseudonymGenerator()
         self.gliner_model = None
@@ -769,6 +780,8 @@ class TransformerAnonymizer:
             start = ent["start"]
             end = ent["end"]
             etype = self._normalize_type(ent["entity_type"])
+            if self.preserve_dates and etype == "DATE":
+                continue
             raw_surface = text[start:end]
 
             leading_ws = len(raw_surface) - len(raw_surface.lstrip())
@@ -779,6 +792,8 @@ class TransformerAnonymizer:
                 continue
 
             surface = text[trimmed_start:trimmed_end]
+            if self.preserve_dates and self._surface_is_date(surface):
+                continue
             normalized_display = self._prepare_surface_for_mapping(surface, etype)
             norm_compact, norm_spaced = self._normalize_surface_key(normalized_display)
             if not norm_compact and not norm_spaced:
@@ -901,6 +916,13 @@ class TransformerAnonymizer:
         clean = re.sub(r"[\"'“”‘’\)\(\[\]]+$", "", clean)
         clean = re.sub(r"\s+", " ", clean)
         return clean.strip()
+
+    def _surface_is_date(self, surface: str) -> bool:
+        cleaned = self._clean_surface(surface)
+        if not cleaned:
+            return False
+        cleaned = cleaned.strip(" ,.;:")
+        return bool(DATE_RE.fullmatch(cleaned))
 
     def _prepare_surface_for_mapping(self, surface: str, label: str) -> str:
         """Normalise le rendu (casse, accents) pour homogénéiser le mapping."""
@@ -1229,10 +1251,15 @@ class TransformerAnonymizer:
 
 def run_transformer_anonymization(
     text: str,
-    domain_entities: Dict[str, List[str]] | None = None
+    domain_entities: Dict[str, List[str]] | None = None,
+    *,
+    preserve_dates: bool = True,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Point d'entrée simple, compatible avec run_presidio_anonymization()
     """
-    anonymizer = TransformerAnonymizer(domain_entities=domain_entities)
+    anonymizer = TransformerAnonymizer(
+        domain_entities=domain_entities,
+        preserve_dates=preserve_dates,
+    )
     return anonymizer.anonymize_with_tags(text)

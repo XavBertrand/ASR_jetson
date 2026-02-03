@@ -9,7 +9,7 @@
 - `models/` and `outputs/` are local caches/artifacts (typically gitignored).
 
 ## Build, Test, and Development Commands
-- `uv sync --extra dev --extra media` installs dependencies (use `--extra gpu-linux` or `--extra gpu-jetson` for CUDA targets).
+- `uv sync --extra dev` installs dependencies (use `--extra gpu-linux` or `--extra gpu-jetson` for CUDA targets).
 - `uv run asr-pipeline --audio path/to/file.wav --out-dir outputs` runs the CLI pipeline locally.
 - `uv run pytest` runs the full test suite with coverage (`--cov=src/asr_jetson` is configured).
 - `uv run pytest -m "not gpu"` skips GPU-dependent tests when CUDA/Pyannote is unavailable.

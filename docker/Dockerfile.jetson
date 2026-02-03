@@ -58,6 +58,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM base AS builder
 WORKDIR /build
 
+# Dépendances de build pour PyAV (Faster-Whisper sur aarch64)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      pkg-config \
+      libavcodec-dev \
+      libavformat-dev \
+      libavdevice-dev \
+      libavutil-dev \
+      libavfilter-dev \
+      libswscale-dev \
+      libswresample-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* /var/tmp/*
+
 # Installation de uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     rm -rf /root/.cache
@@ -77,8 +92,11 @@ COPY pyproject.toml README.md ./
 COPY ./src ./src
 
 # Installation avec nettoyage immédiat et agressif
+# Forcer PyAV < 14 sur Jetson (FFmpeg 6)
+RUN printf "av<14\n" > /tmp/uv-constraints.txt
+ENV PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache -e ".[media,tensorrt]" language-tool-python && \
+    uv pip install --no-cache --constraints /tmp/uv-constraints.txt -e ".[tensorrt]" language-tool-python && \
     rm -rf /tmp/* /var/tmp/*
 
 # Torch/CUDA (JetPack) already provided by base image; Pyannote 3.x installed via project deps.

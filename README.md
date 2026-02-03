@@ -72,9 +72,9 @@ git clone https://github.com/XavBertrand/ASR_jetson.git
 cd ASR_jetson
 
 # Install dependencies (pick the variant matching your hardware)
-uv sync --extra dev --extra media                                 # CPU-only
-# uv sync --extra dev --extra media --extra gpu-linux             # Desktop GPU (CUDA)
-# uv sync --extra dev --extra media --extra gpu-jetson            # Jetson Orin / aarch64
+uv sync --extra dev                                                # CPU-only
+# uv sync --extra dev --extra gpu-linux                            # Desktop GPU (CUDA)
+# uv sync --extra dev --extra gpu-jetson                           # Jetson Orin / aarch64
 
 # Authenticate with Hugging Face once for Pyannote access
 export HUGGINGFACE_TOKEN=hf_xxx
