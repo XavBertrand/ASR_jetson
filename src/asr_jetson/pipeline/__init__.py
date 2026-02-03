@@ -1,4 +1,4 @@
 """Pipeline orchestration module"""
-from src.asr_jetson.pipeline.full_pipeline import run_pipeline, PipelineConfig
+from asr_jetson.pipeline.full_pipeline import PipelineConfig, run_pipeline
 
 __all__ = ["run_pipeline", "PipelineConfig"]

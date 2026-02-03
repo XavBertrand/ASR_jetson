@@ -29,7 +29,10 @@ from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import load_catalog
-from asr_jetson.postprocessing.meeting_report import generate_pdf_report
+from asr_jetson.postprocessing.meeting_report import (
+    format_meeting_date_literal,
+    generate_pdf_report,
+)
 from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 from asr_jetson.postprocessing import mistral_client
 
@@ -577,7 +580,8 @@ def _run_postprocessing(
                 f"Contexte sur les interlocuteurs (anonymisé) :\n{speaker_context_anon}\n\n"
                 + anonymized_payload
             )
-        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date)
+        meeting_date_label = format_meeting_date_literal(meeting_date)
+        user_prefix = prompt.user_prefix.format(meeting_date=meeting_date_label)
         analysis_anonymized = mistral_client.chat_complete(
             model=prompt.model,
             system=prompt.system,

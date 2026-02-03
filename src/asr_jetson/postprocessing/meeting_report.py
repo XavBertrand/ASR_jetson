@@ -255,6 +255,21 @@ _COMMON_MONTHS = {
 _COMMON_DAYS = {
     "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
 }
+_FRENCH_MONTH_LABELS = {
+    1: "janvier",
+    2: "février",
+    3: "mars",
+    4: "avril",
+    5: "mai",
+    6: "juin",
+    7: "juillet",
+    8: "août",
+    9: "septembre",
+    10: "octobre",
+    11: "novembre",
+    12: "décembre",
+}
+_DATE_PARSE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d")
 
 
 def _build_allowed_person_names(mapping: Dict[str, Any]) -> set[str]:
@@ -330,6 +345,30 @@ def _safe_filename_component(component: str, fallback: str) -> str:
     """
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", component.strip())
     return cleaned or fallback
+
+
+def format_meeting_date_literal(date_value: Optional[str]) -> str:
+    """
+    Format the meeting date in a French literal form (e.g., "15 janvier 2012").
+    """
+    raw = (date_value or "").strip()
+    if not raw:
+        now = datetime.now()
+        return f"{now.day} {_FRENCH_MONTH_LABELS[now.month]} {now.year}"
+
+    lower = raw.lower()
+    if any(month in lower for month in _COMMON_MONTHS):
+        return raw
+
+    candidate = raw.split("T", 1)[0].split(" ", 1)[0].strip(" ,;")
+    for fmt in _DATE_PARSE_FORMATS:
+        try:
+            parsed = datetime.strptime(candidate, fmt)
+        except ValueError:
+            continue
+        return f"{parsed.day} {_FRENCH_MONTH_LABELS[parsed.month]} {parsed.year}"
+
+    return raw
 
 
 def _build_html_report(
@@ -446,10 +485,11 @@ def generate_pdf_report(
     corrected_md = _polish_markdown_with_languagetool(deanonymized_md)
 
     base = _derive_base_name(Path(anonymized_markdown_path), run_id=run_id)
-    meeting_date_str = (
+    meeting_date_raw = (
         (meeting_date or datetime.now().strftime("%Y-%m-%d")).strip()
         or datetime.now().strftime("%Y-%m-%d")
     )
+    meeting_date_label = format_meeting_date_literal(meeting_date_raw)
     run_time_str = (
         (run_time or datetime.now().strftime("%H%M%S")).strip()
         or datetime.now().strftime("%H%M%S")
@@ -463,7 +503,7 @@ def generate_pdf_report(
     md_path = reports_dir / f"{base}_meeting_report.md"
     pdf_filename = "compte_rendu_{audio}_{date}_{time}.pdf".format(
         audio=_safe_filename_component(audio_component, "audio"),
-        date=_safe_filename_component(meeting_date_str, "date"),
+        date=_safe_filename_component(meeting_date_raw, "date"),
         time=_safe_filename_component(run_time_str, "time"),
     )
     pdf_path = pdf_dir / pdf_filename
@@ -475,13 +515,13 @@ def generate_pdf_report(
         corrected_md,
         pdf_path,
         title=report_title,
-        report_date=meeting_date_str,
+        report_date=meeting_date_label,
     )
     _render_docx_report(
         corrected_md,
         docx_path,
         title=report_title,
-        report_date=meeting_date_str,
+        report_date=meeting_date_label,
     )
 
     return {
