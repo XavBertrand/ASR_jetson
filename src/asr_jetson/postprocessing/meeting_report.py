@@ -236,8 +236,8 @@ def _normalize_mapping(mapping: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _NAME_SEQUENCE_RE = re.compile(
-    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?"
-    r"(?:\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?){1,2}\b"
+    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-Za-zÀ-ÖØ-öø-ÿ]+)?"
+    r"(?:\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-Za-zÀ-ÖØ-öø-ÿ]+)?){1,2}\b"
 )
 _COMMON_REPORT_WORDS = {
     "compte", "rendu", "entretien", "client", "collaborateur", "association",
@@ -270,6 +270,8 @@ _FRENCH_MONTH_LABELS = {
     12: "décembre",
 }
 _DATE_PARSE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d")
+_PERSON_NAME_CLEAN_RE = re.compile(r"[^a-zà-öø-ÿ\s]+")
+_PERSON_NAME_HYPHENS_RE = re.compile(r"[’'`´\-\u2010\u2011\u2012\u2013\u2014\u2212]+")
 
 
 def _build_allowed_person_names(mapping: Dict[str, Any]) -> set[str]:
@@ -299,26 +301,45 @@ def _build_allowed_person_names(mapping: Dict[str, Any]) -> set[str]:
                 allowed.add(str(pseudo).lower())
             if canonical:
                 allowed.add(str(canonical).lower())
+    context_names = mapping.get("context_names") or []
+    if isinstance(context_names, list):
+        for name in context_names:
+            if name:
+                allowed.add(str(name).lower())
     return allowed
+
+
+def _normalize_person_name(value: str) -> str:
+    lowered = value.lower()
+    lowered = _PERSON_NAME_HYPHENS_RE.sub(" ", lowered)
+    lowered = _PERSON_NAME_CLEAN_RE.sub(" ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
 
 
 def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
     allowed = _build_allowed_person_names(mapping)
     if not allowed:
         return text
+    allowed_normalized = {_normalize_person_name(name) for name in allowed if name}
 
     def _replace(match: re.Match) -> str:
         candidate = match.group(0)
         lower = candidate.lower()
+        normalized = _normalize_person_name(candidate)
         if lower in allowed:
+            return candidate
+        if normalized and normalized in allowed_normalized:
             return candidate
         if lower in _COMMON_REPORT_WORDS or lower in _COMMON_MONTHS or lower in _COMMON_DAYS:
             return candidate
         if candidate.isupper():
             return candidate
-        return "Intervenant"
+        return ""
 
-    return _NAME_SEQUENCE_RE.sub(_replace, text)
+    updated = _NAME_SEQUENCE_RE.sub(_replace, text)
+    updated = re.sub(r"[ \t]{2,}", " ", updated)
+    updated = re.sub(r"[ \t]+([,.;:!?])", r"\1", updated)
+    return updated
 
 
 def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any]) -> str:

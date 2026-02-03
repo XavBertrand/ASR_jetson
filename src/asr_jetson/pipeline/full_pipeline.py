@@ -460,6 +460,55 @@ def _resolve_transformers_device(device_pref: str) -> int:
         return 0 if torch.cuda.is_available() else -1
 
 
+_CONTEXT_NAME_RE = re.compile(
+    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-Za-zÀ-ÖØ-öø-ÿ]+)?"
+    r"(?:\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-Za-zÀ-ÖØ-öø-ÿ]+)?){0,2}\b"
+)
+_CONTEXT_NAME_STOPWORDS = {
+    "entretien",
+    "avocat",
+    "avocate",
+    "cabinet",
+    "client",
+    "cliente",
+    "collaborateur",
+    "collaboratrice",
+    "gérante",
+    "gerante",
+    "monsieur",
+    "madame",
+    "maitre",
+    "maître",
+    "m",
+    "m.",
+    "mme",
+    "mlle",
+}
+
+
+def _extract_context_names(text: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+    for match in _CONTEXT_NAME_RE.finditer(text or ""):
+        candidate = match.group(0).strip(" ,;:")
+        if not candidate:
+            continue
+        tokens = [token for token in candidate.split() if token]
+        if not tokens:
+            continue
+        while tokens and tokens[0].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
+            tokens.pop(0)
+        while tokens and tokens[-1].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
+            tokens.pop()
+        if not tokens:
+            continue
+        cleaned = " ".join(tokens)
+        if cleaned not in seen:
+            names.append(cleaned)
+            seen.add(cleaned)
+    return names
+
+
 def _run_postprocessing(
     *,
     base_text_path: Path,
@@ -531,6 +580,12 @@ def _run_postprocessing(
             context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
             mapping = _merge_anonymization_mappings(mapping, context_mapping)
             speaker_context_anon = context_anonymized
+            context_names = _extract_context_names(speaker_context_hint)
+            if context_names:
+                existing_context = set(mapping.get("context_names") or [])
+                mapping["context_names"] = list(existing_context) + [
+                    name for name in context_names if name not in existing_context
+                ]
 
         corrected_text = mapping.get("corrected_text")
         if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
