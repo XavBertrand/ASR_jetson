@@ -58,6 +58,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM base AS builder
 WORKDIR /build
 
+# Dépendances de build pour PyAV (pkg-config + headers FFmpeg)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      pkg-config \
+      libavcodec-dev \
+      libavformat-dev \
+      libavdevice-dev \
+      libavutil-dev \
+      libswscale-dev \
+      libswresample-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /tmp/* /var/tmp/*
+
 # Installation de uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     rm -rf /root/.cache
