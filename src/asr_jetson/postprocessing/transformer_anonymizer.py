@@ -27,6 +27,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     GLiNER = None  # type: ignore
 
+URL_HINT_RE = re.compile(r"(https?://|www\\.|\\.[a-z]{2,})", re.IGNORECASE)
+ACCOUNT_DIGITS_RE = re.compile(r"\\d{6,}")
+
 
 def _resolve_device_index(device: Optional[int | str]) -> int:
     """
@@ -251,7 +254,8 @@ class TransformerAnonymizer:
         ]
         if self.preserve_dates:
             self.gliner_labels = [label for label in self.gliner_labels if label != "date"]
-        self.gliner_threshold = 0.35
+        # GLiNER est sensible aux faux positifs; on relève légèrement le seuil.
+        self.gliner_threshold = 0.55
         self.pseudonyms = PseudonymGenerator()
         self.gliner_model = None
         self.ner_pipeline = None
@@ -301,6 +305,19 @@ class TransformerAnonymizer:
 
         # Seuils
         self.min_score = 0.5
+        self.min_score_by_type = {
+            "PERSON": 0.6,
+            "ORGANIZATION": 0.6,
+            "LOCATION": 0.6,
+            "MISC": 0.8,
+            "PHONE": 0.9,
+            "EMAIL": 0.9,
+            "IBAN": 0.9,
+            "ACCOUNT": 0.9,
+            "SIREN_SIRET": 0.9,
+            "URL": 0.9,
+            "DATE": 0.9,
+        }
         self.min_length = 2
         # Stopwords et mots génériques à ignorer pour éviter les faux positifs.
         self.person_blocklist = {
@@ -310,12 +327,24 @@ class TransformerAnonymizer:
             "relance", "relances", "relancer", "moral", "morale", "cooptation", "rupture", "serfa",
             "serfas", "cerfa", "cerfas"
         }
+        self.org_acronym_whitelist = {
+            "CSE", "CPH", "OPCO", "CJD", "URSSAF", "DREETS", "DRH", "CHSCT",
+            "CJUE", "CNIL", "INSEE", "CAF", "CARSAT", "CIPAV",
+        }
         self.generic_blocklist = self.person_blocklist | {
             "sms", "whatsapp", "mail", "mails", "email", "emails", "tennis", "lundi", "mardi",
             "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
             "client", "clients", "organisation", "organisations", "entreprise", "entreprises",
             "avocat", "avocats", "cabinet", "ligne", "telephone", "téléphone", "compte",
             "entrepreneur", "entrepreneuriat", "contact", "contacts"
+        }
+        self.non_pii_phrases = {
+            "lien", "liens", "lien direct", "mes liens", "site internet",
+            "coup de fil", "professionnel", "professionnels",
+            "compte", "comptes", "crédit", "credit",
+            "association", "associations", "l'association",
+            "entreprise", "entreprises", "l'entreprise",
+            "du droit animalier",
         }
 
     def analyze(self, text: str) -> List[Dict[str, Any]]:
@@ -648,18 +677,33 @@ class TransformerAnonymizer:
                 continue
 
             etype_norm = self._normalize_type(ent["entity_type"])
+            try:
+                score_val = float(ent.get("score", 1.0))
+            except (TypeError, ValueError):
+                score_val = 1.0
+            is_domain_value = surface.lower() in self._domain_values
 
             if len(surface) < self.min_length:
                 continue
             surface_lower = surface.lower()
-            if surface_lower in self.whitelist:
-                continue
             if surface.upper().startswith("SPEAKER"):
                 continue
             if "speaker" in surface.lower():
                 continue
-            if self._should_skip_surface(surface, etype_norm):
-                continue
+            if not is_domain_value:
+                if surface_lower in self.non_pii_phrases:
+                    continue
+                if surface_lower in self.whitelist:
+                    continue
+                if surface.isupper() and len(surface) <= 4 and surface in self.org_acronym_whitelist:
+                    continue
+                min_type_score = self.min_score_by_type.get(etype_norm, self.min_score)
+                if score_val < min_type_score:
+                    continue
+                if self._should_skip_surface(surface, etype_norm):
+                    continue
+                if not self._structured_is_valid(surface, etype_norm):
+                    continue
             common_usage = self._looks_like_common_noun_usage(surface, text, start, end)
 
             ent_copy = ent.copy()
@@ -923,6 +967,28 @@ class TransformerAnonymizer:
             return False
         cleaned = cleaned.strip(" ,.;:")
         return bool(DATE_RE.fullmatch(cleaned))
+
+    def _structured_is_valid(self, surface: str, etype_norm: str) -> bool:
+        clean = self._clean_surface(surface)
+        if not clean:
+            return False
+        if etype_norm == "URL":
+            return bool(URL_HINT_RE.search(clean))
+        if etype_norm == "PHONE":
+            digits = re.sub(r"\\D", "", clean)
+            return len(digits) >= 6
+        if etype_norm in {"IBAN", "ACCOUNT"}:
+            if IBAN_RE.fullmatch(clean):
+                return True
+            digits = re.sub(r"\\D", "", clean)
+            return bool(ACCOUNT_DIGITS_RE.search(digits))
+        if etype_norm == "EMAIL":
+            return bool(EMAIL_RE.fullmatch(clean))
+        if etype_norm == "SIREN_SIRET":
+            return bool(SIREN_SIRET_RE.fullmatch(clean))
+        if etype_norm == "DATE":
+            return bool(DATE_RE.fullmatch(clean))
+        return True
 
     def _prepare_surface_for_mapping(self, surface: str, label: str) -> str:
         """Normalise le rendu (casse, accents) pour homogénéiser le mapping."""

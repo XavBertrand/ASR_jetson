@@ -70,6 +70,7 @@ PROMPT_TITLE_MAP: dict[str, str] = {
     "entretien_client_particulier_contentieux": "Compte Rendu d'Entretien Client",
     "entretien_client_professionnel_conseil": "Compte Rendu d'Entretien Client",
     "entretien_client_professionnel_contentieux": "Compte Rendu d'Entretien Client",
+    "compte_rendu_association": "Compte Rendu Association",
 }
 _LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
 _LT_DISABLED = (os.getenv("DISABLE_LANGUAGETOOL") or "").strip().lower() in {
@@ -234,11 +235,83 @@ def _normalize_mapping(mapping: Dict[str, Any]) -> Dict[str, Any]:
     return mapping
 
 
+_NAME_SEQUENCE_RE = re.compile(
+    r"\b[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?"
+    r"(?:\s+[A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+(?:[-'][A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ]+)?){0,2}\b"
+)
+_COMMON_REPORT_WORDS = {
+    "compte", "rendu", "entretien", "client", "collaborateur", "association",
+    "résumé", "resume", "participants", "sujets", "décisions", "decisions",
+    "actions", "prochaines", "étapes", "etapes", "analyse", "risques",
+    "opportunités", "opportunites", "chiffres", "repères", "reperes",
+    "points", "friction", "difficultés", "difficultes", "contexte",
+    "description", "situation", "thématiques", "thematiques", "stratégie",
+    "strategie", "plan", "vigilance", "non", "précisé", "precise", "precisé",
+}
+_COMMON_MONTHS = {
+    "janvier", "février", "fevrier", "mars", "avril", "mai", "juin", "juillet",
+    "août", "aout", "septembre", "octobre", "novembre", "décembre", "decembre",
+}
+_COMMON_DAYS = {
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+}
+
+
+def _build_allowed_person_names(mapping: Dict[str, Any]) -> set[str]:
+    allowed: set[str] = set()
+    entities = mapping.get("entities") or []
+    if isinstance(entities, dict):
+        items = entities.values()
+    else:
+        items = entities
+    for info in items:
+        label = (info.get("label") or info.get("type") or "").upper()
+        if label not in {"PERSON", "PER"}:
+            continue
+        for key in ("canonical", "pseudonym"):
+            value = info.get(key)
+            if value:
+                allowed.add(value.lower())
+        for key in ("values", "variants", "mentions"):
+            values = info.get(key) or []
+            for value in values:
+                if value:
+                    allowed.add(str(value).lower())
+    pseudo_reverse = mapping.get("pseudonym_reverse_map") or {}
+    if isinstance(pseudo_reverse, dict):
+        for pseudo, canonical in pseudo_reverse.items():
+            if pseudo:
+                allowed.add(str(pseudo).lower())
+            if canonical:
+                allowed.add(str(canonical).lower())
+    return allowed
+
+
+def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
+    allowed = _build_allowed_person_names(mapping)
+    if not allowed:
+        return text
+
+    def _replace(match: re.Match) -> str:
+        candidate = match.group(0)
+        lower = candidate.lower()
+        if lower in allowed:
+            return candidate
+        if lower in _COMMON_REPORT_WORDS or lower in _COMMON_MONTHS or lower in _COMMON_DAYS:
+            return candidate
+        if candidate.isupper():
+            return candidate
+        return "Intervenant"
+
+    return _NAME_SEQUENCE_RE.sub(_replace, text)
+
+
 def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any]) -> str:
     """
     Replace pseudonyms with their canonical values using the anonymization mapping.
     """
-    return deanonymize_text(anonymized_markdown, mapping, restore="canonical")
+    restored = deanonymize_text(anonymized_markdown, mapping, restore="canonical")
+    return _strip_unknown_person_names(restored, mapping)
 
 
 def _derive_base_name(anonymized_path: Path, run_id: Optional[str] = None) -> str:
