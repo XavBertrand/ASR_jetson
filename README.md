@@ -74,7 +74,8 @@ cd ASR_jetson
 # Install dependencies (pick the variant matching your hardware)
 uv sync --extra dev --extra media                                 # CPU-only
 # uv sync --extra dev --extra media --extra gpu-linux             # Desktop GPU (CUDA)
-# uv sync --extra dev --extra media --extra gpu-jetson            # Jetson Orin / aarch64
+# uv sync --extra dev --extra gpu-jetson                          # Jetson Orin / aarch64
+# Note: l'extra "media" (PyAV) requiert FFmpeg 7 et n'est pas dispo sur Jetson.
 
 # Authenticate with Hugging Face once for Pyannote access
 export HUGGINGFACE_TOKEN=hf_xxx
