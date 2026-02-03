@@ -77,7 +77,6 @@ COPY pyproject.toml README.md ./
 COPY ./src ./src
 
 # Installation avec nettoyage immédiat et agressif
-# PyAV (extra "media") requiert FFmpeg 7; non disponible sur Jetson -> on le saute.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv pip install --no-cache -e ".[tensorrt]" language-tool-python && \
     rm -rf /tmp/* /var/tmp/*

@@ -63,7 +63,6 @@ jobs:
 
       # 💡 Adapte les "extras" aux tiens. Ici on suppose que:
       # - "dev" contient pytest et les outils de test
-      # - "media" contient torchaudio / audio IO
       # On reste CPU-only sur le runner CI.
       - name: Resolve & install dependencies with uv (CPU)
         env:
@@ -71,7 +70,7 @@ jobs:
           PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: |
           # Si tu utilises uv.lock, garde --frozen. Sinon retire-le.
-          uv sync --frozen --extra dev --extra media
+          uv sync --frozen --extra dev
 
       - name: Print environment
         run: |

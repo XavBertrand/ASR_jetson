@@ -96,7 +96,7 @@ wheels = [
 
 [[package]]
 name = "asr-jetson"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "audioread", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -156,14 +156,10 @@ gpu-linux = [
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchaudio", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
-media = [
-    { name = "av", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "audioread", specifier = ">=3.0.1" },
-    { name = "av", marker = "extra == 'media'", specifier = ">=13,<15" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
     { name = "ctranslate2", specifier = ">=4.4.0" },
     { name = "docx-python", specifier = ">=0.1.0" },
@@ -224,7 +220,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.24.0" },
     { name = "weasyprint", specifier = ">=67.0" },
 ]
-provides-extras = ["dev", "api", "tensorrt", "media", "gpu-win", "gpu-linux", "gpu-jetson"]
+provides-extras = ["dev", "api", "tensorrt", "gpu-win", "gpu-linux", "gpu-jetson"]
 
 [[package]]
 name = "asteroid-filterbanks"
@@ -263,10 +259,6 @@ name = "av"
 version = "14.4.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/86/f6/0b473dab52dfdea05f28f3578b1c56b6c796ce85e76951bab7c4e38d5a74/av-14.4.0.tar.gz", hash = "sha256:3ecbf803a7fdf67229c0edada0830d6bfaea4d10bfb24f0c3f4e607cd1064b42", size = 3892203, upload-time = "2025-05-16T19:13:35.737Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f8/9a/8ffabfcafb42154b4b3a67d63f9b69e68fa8c34cb39ddd5cb813dd049ed4/av-14.4.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6bed513cbcb3437d0ae47743edc1f5b4a113c0b66cdd4e1aafc533abf5b2fbf2", size = 35287279, upload-time = "2025-05-16T19:09:39.711Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/29/0db48079c207d1cba7a2783896db5aec3816e17de55942262c244dffbc0f/av-14.4.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:ce7c9cd452153d36f1b1478f904ed5f9ab191d76db873bdd3a597193290805d4", size = 37265250, upload-time = "2025-05-16T19:09:50.013Z" },
-]
 
 [[package]]
 name = "black"
