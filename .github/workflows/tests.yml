@@ -56,6 +56,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install uv
+      
+      - name: Create venv (Python 3.11)
+        run: |
+          uv venv --python 3.11 .venv
 
       # 💡 Adapte les "extras" aux tiens. Ici on suppose que:
       # - "dev" contient pytest et les outils de test
@@ -67,7 +71,7 @@ jobs:
           PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: |
           # Si tu utilises uv.lock, garde --frozen. Sinon retire-le.
-          uv sync --extra dev --extra media
+          uv sync --frozen --extra dev --extra media
 
       - name: Print environment
         run: |
