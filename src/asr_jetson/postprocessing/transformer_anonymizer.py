@@ -681,27 +681,29 @@ class TransformerAnonymizer:
                 score_val = float(ent.get("score", 1.0))
             except (TypeError, ValueError):
                 score_val = 1.0
+            is_domain_value = surface.lower() in self._domain_values
 
             if len(surface) < self.min_length:
                 continue
             surface_lower = surface.lower()
-            if surface_lower in self.non_pii_phrases:
-                continue
-            if surface_lower in self.whitelist:
-                continue
             if surface.upper().startswith("SPEAKER"):
                 continue
             if "speaker" in surface.lower():
                 continue
-            if surface.isupper() and len(surface) <= 4 and surface in self.org_acronym_whitelist:
-                continue
-            min_type_score = self.min_score_by_type.get(etype_norm, self.min_score)
-            if score_val < min_type_score:
-                continue
-            if self._should_skip_surface(surface, etype_norm):
-                continue
-            if not self._structured_is_valid(surface, etype_norm):
-                continue
+            if not is_domain_value:
+                if surface_lower in self.non_pii_phrases:
+                    continue
+                if surface_lower in self.whitelist:
+                    continue
+                if surface.isupper() and len(surface) <= 4 and surface in self.org_acronym_whitelist:
+                    continue
+                min_type_score = self.min_score_by_type.get(etype_norm, self.min_score)
+                if score_val < min_type_score:
+                    continue
+                if self._should_skip_surface(surface, etype_norm):
+                    continue
+                if not self._structured_is_valid(surface, etype_norm):
+                    continue
             common_usage = self._looks_like_common_noun_usage(surface, text, start, end)
 
             ent_copy = ent.copy()
