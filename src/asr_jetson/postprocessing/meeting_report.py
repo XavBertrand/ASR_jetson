@@ -337,9 +337,18 @@ def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
         return ""
 
     updated = _NAME_SEQUENCE_RE.sub(_replace, text)
-    updated = re.sub(r"[ \t]{2,}", " ", updated)
-    updated = re.sub(r"[ \t]+([,.;:!?])", r"\1", updated)
-    return updated
+    lines = updated.splitlines()
+    cleaned = []
+    for line in lines:
+        match = re.match(r"^([ \t]*)(.*)$", line)
+        if not match:
+            cleaned.append(line)
+            continue
+        indent_text, rest = match.groups()
+        rest = re.sub(r"[ \t]{2,}", " ", rest)
+        rest = re.sub(r"[ \t]+([,.;:!?])", r"\1", rest)
+        cleaned.append(indent_text + rest)
+    return "\n".join(cleaned)
 
 
 def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any]) -> str:
