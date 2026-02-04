@@ -32,6 +32,8 @@ ENV GIT_BRANCH="${GIT_BRANCH}" \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     gnupg \
+    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
+    && apt-get update && apt-get install -y --no-install-recommends \
     git \
     wget \
     curl \
@@ -39,8 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     nvidia-utils-535 \
     openjdk-21-jre-headless \
-    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
-    && apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && rm -rf /opt/conda /root/.cache /var/cache/apt/* /tmp/* /var/tmp/* \

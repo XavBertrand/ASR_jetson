@@ -70,11 +70,16 @@ class PseudonymGenerator:
         self._cache: Dict[Tuple[str, str], str] = {}
         self._used: Dict[str, Set[str]] = defaultdict(set)
 
-        self._first_names = [
-            "Alice", "Camille", "Chloe", "Elise", "Emma", "Juliette", "Laura", "Lea",
-            "Lucie", "Manon", "Marine", "Nora", "Pauline", "Sarah", "Zoe",
-            "Arthur", "Bastien", "Florian", "Hugo", "Lucas", "Martin", "Noe", "Romain",
+        self._female_first_names = [
+            "Alice", "Camille", "Chloe", "Delphine", "Elise", "Emma", "Juliette", "Laura",
+            "Lea", "Lucie", "Manon", "Marine", "Micheline", "Nora", "Pauline", "Sarah",
+            "Sylvie", "Zoe", "Chantal",
         ]
+        self._male_first_names = [
+            "Arthur", "Bastien", "Florian", "François", "Gustave", "Hugo", "Lucas",
+            "Martin", "Noe", "Romain",
+        ]
+        self._first_names = self._female_first_names + self._male_first_names
         self._last_names = [
             "Adam", "Bertrand", "Bernard", "Blanc", "Dupont", "Durand", "Fournier", "Garcia",
             "Gauthier", "Lefebvre", "Lemoine", "Martin", "Moreau", "Morin", "Perrin",
@@ -94,6 +99,31 @@ class PseudonymGenerator:
             "Grenoble", "Nice", "Dijon", "Tours", "Poitiers", "Clermont-Ferrand", "Metz",
             "Nancy", "Angers", "Caen", "Reims", "Limoges",
         ]
+        self._gender_titles = {
+            "m": "male",
+            "mr": "male",
+            "monsieur": "male",
+            "mme": "female",
+            "mrs": "female",
+            "ms": "female",
+            "madame": "female",
+            "mlle": "female",
+            "mademoiselle": "female",
+        }
+        self._neutral_titles = {
+            "maitre",
+            "maître",
+            "dr",
+            "docteur",
+            "docteure",
+        }
+        self._ambiguous_first_names = {"camille", "claude", "dominique"}
+        self._female_first_names_set = {
+            unidecode(name).lower() for name in self._female_first_names
+        } | {"chantal", "delphine", "sylvie", "micheline"}
+        self._male_first_names_set = {
+            unidecode(name).lower() for name in self._male_first_names
+        } | {"francois", "gustave"}
 
     def _digest(self, label: str, key: str) -> int:
         normalized = unidecode((key or "").strip().lower())
@@ -125,8 +155,14 @@ class PseudonymGenerator:
         used_global.add(fallback)
         return fallback
 
-    def _build_person(self, digest: int) -> str:
-        first = self._pick(self._first_names, digest)
+    def _build_person(self, digest: int, gender: Optional[str] = None) -> str:
+        if gender == "female":
+            pool = self._female_first_names
+        elif gender == "male":
+            pool = self._male_first_names
+        else:
+            pool = self._first_names
+        first = self._pick(pool, digest)
         last = self._pick(self._last_names, digest // 13)
         return f"{first} {last}"
 
@@ -171,6 +207,33 @@ class PseudonymGenerator:
     def _fallback(self, label: str, digest: int) -> str:
         return f"ANON-{label}-{digest % 10000:04d}"
 
+    def _infer_gender(self, key: str) -> Optional[str]:
+        normalized = unidecode((key or "").strip().lower())
+        if not normalized:
+            return None
+        tokens = re.findall(r"[a-z]+", normalized)
+        if not tokens:
+            return None
+        first = tokens[0]
+        if first in self._gender_titles:
+            return self._gender_titles[first]
+        while tokens and tokens[0] in self._neutral_titles:
+            tokens.pop(0)
+        if not tokens:
+            return None
+        first = tokens[0]
+        if first in self._ambiguous_first_names:
+            return "female" if first == "camille" else "male"
+        if first in self._female_first_names_set:
+            return "female"
+        if first in self._male_first_names_set:
+            return "male"
+        if len(tokens) == 1:
+            return None
+        if first.endswith("e"):
+            return "female"
+        return "male"
+
     def generate(self, label: str, key: str) -> str:
         normalized_label = label.upper()
         digest = self._digest(normalized_label, key)
@@ -179,7 +242,8 @@ class PseudonymGenerator:
             return self._cache[cache_key]
 
         if normalized_label == "PERSON":
-            candidate = self._build_person(digest)
+            gender = self._infer_gender(key)
+            candidate = self._build_person(digest, gender=gender)
         elif normalized_label == "ORGANIZATION":
             candidate = self._build_org(digest)
         elif normalized_label == "LOCATION":
