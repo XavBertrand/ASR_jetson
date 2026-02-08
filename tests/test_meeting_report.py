@@ -129,7 +129,7 @@ def test_pipeline_style_meeting_report_generation(tmp_path: Path, monkeypatch):
     assert "Pauline Blanc" not in markdown
     assert "Udaf" in markdown
     assert "Detail Group" in markdown
-    assert "Marine" in markdown
+    assert "Françoise" in markdown
     assert "| Pseudonyme" in markdown
     assert markdown.count("###") >= 6
 
@@ -216,7 +216,7 @@ def test_end_to_end_report_generation(tmp_path: Path, monkeypatch):
     assert "Migmeca" in markdown
     assert "Detail Group" in markdown
     assert "Udaf" in markdown
-    assert "Marine" in markdown
+    assert "Françoise" in markdown
     assert "| Pseudonyme" in markdown
     assert markdown.count("###") >= 6
 

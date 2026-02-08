@@ -86,15 +86,15 @@ def test_pandoc_html_keeps_nested_list_structure():
 
 
 def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
-    anonymized_md = "Delphine Martin et Laura Blanc valident la décision."
+    anonymized_md = "Micheline Martin et Laura Blanc valident la décision."
     mapping = {
         "pseudonym_reverse_map": {
-            "Laura Blanc": "Marine",
+            "Laura Blanc": "Françoise",
         },
-        "context_names": ["Delphine", "Marine"],
+        "context_names": ["Micheline", "Françoise"],
     }
 
     restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
 
-    assert "Delphine et Marine valident la décision." in restored
-    assert "Delphine Martin" not in restored
+    assert "Micheline et Françoise valident la décision." in restored
+    assert "Micheline Martin" not in restored
