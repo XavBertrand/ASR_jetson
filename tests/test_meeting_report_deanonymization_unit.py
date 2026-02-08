@@ -83,3 +83,18 @@ def test_pandoc_html_keeps_nested_list_structure():
     assert nested_list_re.search(
         html
     ), "Expected nested ordered/unordered lists in the HTML output"
+
+
+def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
+    anonymized_md = "Delphine Martin et Laura Blanc valident la décision."
+    mapping = {
+        "pseudonym_reverse_map": {
+            "Laura Blanc": "Marine",
+        },
+        "context_names": ["Delphine", "Marine"],
+    }
+
+    restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
+
+    assert "Delphine et Marine valident la décision." in restored
+    assert "Delphine Martin" not in restored

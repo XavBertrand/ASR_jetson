@@ -316,11 +316,27 @@ def _normalize_person_name(value: str) -> str:
     return re.sub(r"\s+", " ", lowered).strip()
 
 
+def _build_context_name_aliases(mapping: Dict[str, Any]) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    context_names = mapping.get("context_names") or []
+    if not isinstance(context_names, list):
+        return aliases
+    for name in context_names:
+        if not name:
+            continue
+        display = str(name).strip()
+        normalized = _normalize_person_name(display)
+        if normalized and normalized not in aliases:
+            aliases[normalized] = display
+    return aliases
+
+
 def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
     allowed = _build_allowed_person_names(mapping)
     if not allowed:
         return text
     allowed_normalized = {_normalize_person_name(name) for name in allowed if name}
+    context_aliases = _build_context_name_aliases(mapping)
 
     def _replace(match: re.Match) -> str:
         candidate = match.group(0)
@@ -334,6 +350,16 @@ def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
             return candidate
         if candidate.isupper():
             return candidate
+        if normalized:
+            for context_normalized, context_display in sorted(
+                context_aliases.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                if normalized == context_normalized:
+                    return context_display
+                if normalized.startswith(f"{context_normalized} "):
+                    return context_display
+                if " " not in context_normalized and context_normalized in normalized.split():
+                    return context_display
         return ""
 
     updated = _NAME_SEQUENCE_RE.sub(_replace, text)
