@@ -96,8 +96,9 @@ def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
 
     restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
 
-    assert "Micheline et Françoise valident la décision." in restored
-    assert "Micheline Martin" not in restored
+<<<<<<< HEAD
+    assert "Delphine et Marine valident la décision." in restored
+    assert "Delphine Martin" not in restored
 
 
 def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> None:
@@ -114,9 +115,9 @@ def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> Non
             {
                 "tag": "<PERSON_2>",
                 "type": "PERSON",
-                "canonical": "Micheline Martin",
+                "canonical": "Delphine Martin",
                 "pseudonym": "Manon Gauthier",
-                "mentions": ["Micheline Martin"],
+                "mentions": ["Delphine Martin"],
             },
             {
                 "tag": "<ORGANIZATION_1>",
@@ -133,7 +134,7 @@ def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> Non
         },
         "pseudonym_reverse_map": {
             "Hugo Durand": "M. Marlon",
-            "Manon Gauthier": "Micheline Martin",
+            "Manon Gauthier": "Delphine Martin",
             "Prisme Conseil": "Astronov",
         },
     }
@@ -141,7 +142,7 @@ def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> Non
     restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
 
     assert "M. Marlon confirme le point." in restored
-    assert "Micheline Martin valide la stratégie." in restored
+    assert "Delphine Martin valide la stratégie." in restored
 
 
 def test_deanonymize_report_does_not_restore_ambiguous_first_name_alias() -> None:
@@ -157,3 +158,7 @@ def test_deanonymize_report_does_not_restore_ambiguous_first_name_alias() -> Non
 
     assert "M. Marlon intervient." in restored
     assert "Ensuite, Hugo répond." in restored
+=======
+    assert "Micheline et Françoise valident la décision." in restored
+    assert "Micheline Martin" not in restored
+>>>>>>> feature/change_names_in_tests
