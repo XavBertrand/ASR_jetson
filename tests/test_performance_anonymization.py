@@ -9,7 +9,7 @@ from src.asr_jetson.postprocessing.transformer_anonymizer import TransformerAnon
 def test_bug_espaces():
     """Vérifie que les espaces sont conservés correctement"""
 
-    text = "Marine a appelé Delphine du cabinet Action Avocats à Montpellier."
+    text = "Marine a appelé Delphine du cabinet Super Avocats à Montpellier."
 
     anonymizer = TransformerAnonymizer()
     anon_text, mapping = anonymizer.anonymize_with_tags(text)
@@ -43,11 +43,11 @@ def test_bug_espaces():
 def test_bug_acronymes():
     """Vérifie que les acronymes courts (CJD, UDAF) sont détectés"""
 
-    text = "Marine a rappelé le CJD et l'UDAF pour Action Avocats."
+    text = "Marine a rappelé le CJD et l'UDAF pour Super Avocats."
 
     domain_entities = {
         "PERSON": ["Marine"],
-        "ORGANIZATION": ["CJD", "UDAF", "Action Avocats"]
+        "ORGANIZATION": ["CJD", "UDAF", "Super Avocats"]
     }
 
     anonymizer = TransformerAnonymizer(domain_entities=domain_entities)
@@ -93,12 +93,12 @@ SPEAKER_2 : Donc c'est un besoin de plus de clarté dans les demandes en fait. V
 
 SPEAKER_1 : donc d'informations plus précises voilà c'est ça effectivement ok et sur le
 
-SPEAKER_2 : sur le fonctionnement avec Marine moi ça se passe bien. Delphine aussi est très disponible. On travaille avec Isabelle sur les dossiers complexes et parfois on contacte Action Avocats pour les questions juridiques.
+SPEAKER_2 : sur le fonctionnement avec Marine moi ça se passe bien. Delphine aussi est très disponible. On travaille avec Isabelle sur les dossiers complexes et parfois on contacte Super Avocats pour les questions juridiques.
     """.strip()
 
     domain_entities = {
         "PERSON": ["Marine", "Delphine", "Isabelle"],
-        "ORGANIZATION": ["UDAF", "CJD", "Action Avocats", "Mille Mécat", "Détail Group"]
+        "ORGANIZATION": ["UDAF", "CJD", "Super Avocats", "Mille Mécat", "Détail Group"]
     }
 
     anonymizer = TransformerAnonymizer(domain_entities=domain_entities)
@@ -149,11 +149,11 @@ def test_performance_complete():
     """Test complet avec timing"""
     import time
 
-    text = "Marine travaille avec Delphine chez Action Avocats. Ils collaborent avec le CJD et l'UDAF à Montpellier."
+    text = "Marine travaille avec Delphine chez Super Avocats. Ils collaborent avec le CJD et l'UDAF à Montpellier."
 
     domain = {
         "PERSON": ["Marine", "Delphine"],
-        "ORGANIZATION": ["Action Avocats", "CJD", "UDAF"]
+        "ORGANIZATION": ["Super Avocats", "CJD", "UDAF"]
     }
 
     print("=" * 60)

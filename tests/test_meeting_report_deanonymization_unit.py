@@ -98,3 +98,62 @@ def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
 
     assert "Delphine et Marine valident la décision." in restored
     assert "Delphine Martin" not in restored
+
+
+def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> None:
+    anonymized_md = "Hugo confirme le point. Manon valide la stratégie."
+    mapping = {
+        "entities": [
+            {
+                "tag": "<PERSON_1>",
+                "type": "PERSON",
+                "canonical": "M. Marlon",
+                "pseudonym": "Hugo Durand",
+                "mentions": ["M. Marlon"],
+            },
+            {
+                "tag": "<PERSON_2>",
+                "type": "PERSON",
+                "canonical": "Delphine Martin",
+                "pseudonym": "Manon Gauthier",
+                "mentions": ["Delphine Martin"],
+            },
+            {
+                "tag": "<ORGANIZATION_1>",
+                "type": "ORGANIZATION",
+                "canonical": "Astronov",
+                "pseudonym": "Prisme Conseil",
+                "mentions": ["Astronov"],
+            },
+        ],
+        "pseudonym_map": {
+            "<PERSON_1>": "Hugo Durand",
+            "<PERSON_2>": "Manon Gauthier",
+            "<ORGANIZATION_1>": "Prisme Conseil",
+        },
+        "pseudonym_reverse_map": {
+            "Hugo Durand": "M. Marlon",
+            "Manon Gauthier": "Delphine Martin",
+            "Prisme Conseil": "Astronov",
+        },
+    }
+
+    restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
+
+    assert "M. Marlon confirme le point." in restored
+    assert "Delphine Martin valide la stratégie." in restored
+
+
+def test_deanonymize_report_does_not_restore_ambiguous_first_name_alias() -> None:
+    anonymized_md = "Hugo Durand intervient. Ensuite, Hugo répond."
+    mapping = {
+        "pseudonym_reverse_map": {
+            "Hugo Durand": "M. Marlon",
+            "Hugo Martin": "M. Dupont",
+        }
+    }
+
+    restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
+
+    assert "M. Marlon intervient." in restored
+    assert "Ensuite, Hugo répond." in restored
