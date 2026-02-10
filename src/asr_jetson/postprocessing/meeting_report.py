@@ -226,6 +226,7 @@ def _normalize_mapping(mapping: Dict[str, Any]) -> Dict[str, Any]:
                     "tag": tag,
                     "type": info.get("label") or info.get("type"),
                     "canonical": canonical,
+                    "pseudonym": info.get("pseudonym"),
                     "mentions": mentions,
                 }
             )
@@ -272,6 +273,37 @@ _FRENCH_MONTH_LABELS = {
 _DATE_PARSE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%d/%m/%Y", "%d-%m-%Y", "%Y%m%d")
 _PERSON_NAME_CLEAN_RE = re.compile(r"[^a-zà-öø-ÿ\s]+")
 _PERSON_NAME_HYPHENS_RE = re.compile(r"[’'`´\-\u2010\u2011\u2012\u2013\u2014\u2212]+")
+_PERSON_TOKEN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]+$")
+_PERSON_ALIAS_BOUNDARY_RE = r"[A-Za-zÀ-ÖØ-öø-ÿ'’\-]"
+_PERSON_TITLE_PREFIXES = {
+    "m",
+    "m.",
+    "mme",
+    "mme.",
+    "mlle",
+    "mlle.",
+    "monsieur",
+    "madame",
+    "mademoiselle",
+    "maitre",
+    "maître",
+    "me",
+    "dr",
+    "docteur",
+    "docteure",
+}
+_ORG_NAME_SUFFIXES = {
+    "conseil",
+    "legal",
+    "services",
+    "industries",
+    "groupe",
+    "solutions",
+    "partners",
+    "associates",
+    "collectif",
+    "studio",
+}
 
 
 def _build_allowed_person_names(mapping: Dict[str, Any]) -> set[str]:
@@ -331,6 +363,118 @@ def _build_context_name_aliases(mapping: Dict[str, Any]) -> dict[str, str]:
     return aliases
 
 
+def _person_name_tokens(value: str) -> list[str]:
+    tokens = [token.strip(" ,.;:()[]{}\"") for token in re.split(r"\s+", value.strip()) if token]
+    while tokens:
+        first = tokens[0].lower().strip(".,;:")
+        if first in _PERSON_TITLE_PREFIXES:
+            tokens.pop(0)
+        else:
+            break
+    return [token for token in tokens if token]
+
+
+def _looks_like_person_pseudonym(value: str) -> bool:
+    tokens = _person_name_tokens(value)
+    if len(tokens) < 2:
+        return False
+    if tokens[-1].lower().strip(".,;:") in _ORG_NAME_SUFFIXES:
+        return False
+    for token in tokens:
+        if not _PERSON_TOKEN_RE.fullmatch(token):
+            return False
+        if not token[0].isupper():
+            return False
+    return True
+
+
+def _iter_person_pseudonym_pairs(mapping: Dict[str, Any]) -> list[tuple[str, str]]:
+    pseudo_reverse = mapping.get("pseudonym_reverse_map") or {}
+    if not isinstance(pseudo_reverse, dict):
+        return []
+
+    person_pseudonyms: set[str] = set()
+    entities = mapping.get("entities") or []
+    pseudonym_map = mapping.get("pseudonym_map") or {}
+    entity_items: list[tuple[str, Dict[str, Any]]] = []
+
+    if isinstance(entities, dict):
+        for tag, info in entities.items():
+            if isinstance(info, dict):
+                entity_items.append((str(tag), info))
+    elif isinstance(entities, list):
+        for info in entities:
+            if isinstance(info, dict):
+                entity_items.append((str(info.get("tag") or ""), info))
+
+    for tag, info in entity_items:
+        label = (info.get("label") or info.get("type") or "").upper()
+        if label not in {"PERSON", "PER"}:
+            continue
+        pseudo = info.get("pseudonym")
+        if not pseudo and isinstance(pseudonym_map, dict) and tag:
+            pseudo = pseudonym_map.get(tag)
+        if pseudo:
+            person_pseudonyms.add(str(pseudo))
+
+    pairs: list[tuple[str, str]] = []
+    if person_pseudonyms:
+        for pseudo in person_pseudonyms:
+            canonical = pseudo_reverse.get(pseudo)
+            if pseudo and canonical:
+                pairs.append((str(pseudo), str(canonical)))
+        return pairs
+
+    for pseudo, canonical in pseudo_reverse.items():
+        pseudo_value = str(pseudo)
+        canonical_value = str(canonical)
+        if pseudo_value and canonical_value and _looks_like_person_pseudonym(pseudo_value):
+            pairs.append((pseudo_value, canonical_value))
+    return pairs
+
+
+def _build_person_first_name_aliases(mapping: Dict[str, Any]) -> dict[str, str]:
+    alias_candidates: dict[str, set[str]] = {}
+    alias_display: dict[str, str] = {}
+
+    for pseudonym, canonical in _iter_person_pseudonym_pairs(mapping):
+        tokens = _person_name_tokens(pseudonym)
+        if len(tokens) < 2:
+            continue
+        first_name = tokens[0]
+        if not first_name or first_name == canonical:
+            continue
+        normalized = _normalize_person_name(first_name)
+        if not normalized:
+            continue
+        if normalized in _COMMON_REPORT_WORDS or normalized in _COMMON_MONTHS or normalized in _COMMON_DAYS:
+            continue
+        alias_display.setdefault(normalized, first_name)
+        alias_candidates.setdefault(normalized, set()).add(canonical)
+
+    aliases: dict[str, str] = {}
+    for normalized, canonicals in alias_candidates.items():
+        if len(canonicals) == 1:
+            alias = alias_display.get(normalized)
+            canonical = next(iter(canonicals))
+            if alias and canonical and alias != canonical:
+                aliases[alias] = canonical
+    return aliases
+
+
+def _restore_person_first_name_aliases(text: str, mapping: Dict[str, Any]) -> str:
+    aliases = _build_person_first_name_aliases(mapping)
+    if not aliases:
+        return text
+    restored = text
+    for alias, canonical in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
+        pattern = re.compile(
+            rf"(?<!{_PERSON_ALIAS_BOUNDARY_RE}){re.escape(alias)}(?!{_PERSON_ALIAS_BOUNDARY_RE})"
+        )
+        restored = pattern.sub(canonical, restored)
+    return restored
+
+
 def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
     allowed = _build_allowed_person_names(mapping)
     if not allowed:
@@ -380,8 +524,10 @@ def _strip_unknown_person_names(text: str, mapping: Dict[str, Any]) -> str:
 def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any]) -> str:
     """
     Replace pseudonyms with their canonical values using the anonymization mapping.
+    Also restores single first-name mentions when the PERSON mapping is unambiguous.
     """
     restored = deanonymize_text(anonymized_markdown, mapping, restore="canonical")
+    restored = _restore_person_first_name_aliases(restored, mapping)
     return _strip_unknown_person_names(restored, mapping)
 
 

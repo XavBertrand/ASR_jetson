@@ -95,7 +95,7 @@ def test_anonymization_preserves_dates_for_mistral_report() -> None:
         prompt.model,
         prompt.system,
         prompt.user_prefix.format(meeting_date="2024-05-10") + anonymized_text,
-        temperature=0.1,
+        temperature=0.0,
     )
 
     def _assert_any_match(text: str, patterns: list[str], label: str) -> None:

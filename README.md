@@ -83,6 +83,24 @@ export HUGGINGFACE_TOKEN=hf_xxx
 export MISTRAL_API_KEY=xxxx
 ```
 
+### Repo-local CUDA/cuDNN env (recommended on Linux/WSL)
+
+To avoid local runtime crashes in `faster-whisper`/`ctranslate2` (`libcudnn_cnn.so` errors),
+this repo ships a versioned `.envrc` that exports a repo-scoped `LD_LIBRARY_PATH`.
+
+```bash
+# one-time setup on your machine
+sudo apt install direnv
+echo 'eval "$(direnv hook bash)"' >> ~/.bashrc
+source ~/.bashrc
+
+# one-time per clone
+cd ASR_jetson
+direnv allow
+```
+
+After that, the environment is applied automatically when you enter this repo only.
+
 ---
 
 ## ▶️ Usage
