@@ -18,40 +18,6 @@ def _sec(x_samples: int, sr: int = 16000) -> float:
     return x_samples / float(sr)
 
 
-# def transcribe_segments(model, wav_path, diar_segments, language=None):
-#     """
-#     Transcribe using the stable defaults of Faster-Whisper.
-#     Audio windows are limited to [start, end] to reduce encoder load.
-#     """
-#     results = []
-#     for seg in diar_segments:
-#         start = float(seg.get("start", 0.0))
-#         end = float(seg.get("end", 0.0))
-#         if end <= start or (end - start) < 0.05:
-#             continue
-#
-#         try:
-#             # Window: request the exact duration from Faster-Whisper.
-#             segments, info = model.transcribe(
-#                 wav_path,
-#                 language=language,     # None = auto
-#                 task="transcribe",
-#                 vad_filter=False,      # VAD already applied upstream
-#                 chunk_length=15,       # petit chunk → moins de pression
-#                 word_timestamps=False,
-#             )
-#             text = "".join(s.text for s in segments)
-#         except SystemExit:
-#             print("[WARN] CTranslate2 aborted during encode(); empty text for this segment.")
-#             text = ""
-#         except Exception as e:
-#             print(f"[WARN] Whisper transcribe failed on [{start:.2f}, {end:.2f}]s: {e}")
-#             text = ""
-#
-#         results.append({**seg, "text": text})
-#
-#     return results
-
 def transcribe_full(
     model: Any,
     wav_path: str | Path,

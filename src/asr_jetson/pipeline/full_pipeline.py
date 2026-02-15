@@ -26,7 +26,7 @@ from asr_jetson.diarization.pipeline_diarization import apply_diarization
 from asr_jetson.asr.whisper_engine import load_faster_whisper
 from asr_jetson.asr.transcribe import transcribe_segments, attach_speakers
 
-from asr_jetson.postprocessing.text_export import write_single_block_per_speaker_txt, write_dialogue_txt
+from asr_jetson.postprocessing.text_export import write_dialogue_txt
 from asr_jetson.postprocessing.llm_clean import clean_text_with_llm
 from asr_jetson.postprocessing.anonymizer import load_catalog
 from asr_jetson.postprocessing.meeting_report import (
