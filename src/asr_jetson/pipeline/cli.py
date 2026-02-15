@@ -16,7 +16,7 @@ from asr_jetson.pipeline.full_pipeline import (
 )
 
 _DEFAULT_REPORT_TYPE = "entretien_collaborateur"
-_DEFAULT_ASR_PROMPT = "Kleos, Pennylane, CJD, Manupro, El Moussaoui"
+_DEFAULT_ASR_PROMPT = "Kleos, Pennylane, CJD"
 
 
 def _resolve_meta_path(base_dir: Path, value: str) -> Path:
@@ -53,7 +53,7 @@ def _resolve_audio_path(
             if candidate.exists():
                 return candidate
             if not Path(value).is_absolute():
-                return candidate
+                 return candidate
 
     for key in ("saved_filename", "original_filename"):
         value = meta.get(key)
