@@ -72,7 +72,7 @@ def _resolve_audio_path(
     return None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """
     Parse CLI arguments and execute a full ASR pipeline run.
 
@@ -126,7 +126,7 @@ def main() -> None:
         ],
         help="Prompt category for the meeting report (matches keys in mistral_prompts.json)",
     )
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if args.meta_json:
         meta_path = Path(args.meta_json).expanduser().resolve()

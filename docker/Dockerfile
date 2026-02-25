@@ -95,6 +95,10 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     find /opt/venv -name "*.pyc" -delete; \
     rm -rf /tmp/* /var/tmp/*
 
+# Safety: ensure we use python-docx and not a conflicting "docx" distribution
+RUN python -m pip uninstall -y docx docx-python || true
+RUN python -c "import docx; import docx.api; print('python-docx OK:', docx.__file__)"
+
 # Copier uniquement le code utile au runtime
 COPY scripts ./scripts
 RUN chmod +x /workspace/scripts/entrypoint.sh
@@ -138,4 +142,4 @@ RUN mkdir -p outputs
 
 # Commande par défaut
 ENTRYPOINT ["/usr/bin/tini", "--", "/workspace/scripts/entrypoint.sh"]
-CMD ["python", "scripts/run_asr_pipeline.py", "--help"]
+CMD ["asr-pipeline", "--help"]
