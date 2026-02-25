@@ -30,7 +30,23 @@ def _default_profiles() -> dict[str, Any]:
                 "report_schema_version": REPORT_SCHEMA_VERSION,
                 "storage_permissions_dir": "0700",
                 "storage_permissions_file": "0600",
-            }
+            },
+            "online_opt_in": {
+                "allow_network": True,
+                "enable_ner": True,
+                "enable_regex": True,
+                "enable_rules": True,
+                "continue_on_error": True,
+                "emit_mapping": True,
+                "mapping_required": False,
+                "max_documents_per_batch": 500,
+                "max_pages_per_document": 1000,
+                "max_total_input_mb": 1024,
+                "mapping_schema_version": MAPPING_SCHEMA_VERSION,
+                "report_schema_version": REPORT_SCHEMA_VERSION,
+                "storage_permissions_dir": "0700",
+                "storage_permissions_file": "0600",
+            },
         }
     }
 

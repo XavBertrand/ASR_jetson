@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -30,6 +31,8 @@ class TempWorkspace:
     def cleanup(self) -> bool:
         if self._path is None:
             return True
+        if os.environ.get("ASR_ANON_FORCE_CLEANUP_FAILURE", "").strip().lower() in {"1", "true", "yes"}:
+            return False
         try:
             shutil.rmtree(self._path, ignore_errors=False)
             return True

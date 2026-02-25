@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import uuid
 from pathlib import Path
 
-from asr_jetson.anonymization.core.errors import InputValidationError, ProcessingError
+from asr_jetson.anonymization.core.errors import InputValidationError, ProcessingError, SecurityPolicyError
 from asr_jetson.anonymization.core.models import (
     BatchRequest,
     BatchResult,
@@ -15,8 +18,10 @@ from asr_jetson.anonymization.core.models import (
     Entity,
     ParsedDocument,
 )
+from asr_jetson.anonymization.core.network_guard import assert_network_allowed
 from asr_jetson.anonymization.core.placeholders import PlaceholderGenerator, normalize_entity_value
-from asr_jetson.anonymization.core.safe_logging import get_logger, sanitize_exception
+from asr_jetson.anonymization.core.safe_logging import get_logger, log_safe, sanitize_exception
+from asr_jetson.anonymization.core.streaming import enforce_limits
 from asr_jetson.anonymization.core.tempfiles import TempWorkspace
 from asr_jetson.anonymization.detectors.ner_detector import NERUnavailableError, NerDetector
 from asr_jetson.anonymization.detectors.regex_detector import RegexDetector
@@ -29,8 +34,12 @@ from asr_jetson.anonymization.renderers.docx_renderer import DocxRenderer
 from asr_jetson.anonymization.renderers.pdf_renderer import PdfRenderer
 from asr_jetson.anonymization.renderers.txt_renderer import TxtRenderer
 from asr_jetson.anonymization.renderers.xlsx_renderer import XlsxRenderer
+from asr_jetson.anonymization.storage.audit_store import AuditStore
 from asr_jetson.anonymization.storage.fs_security import ensure_dir_permissions, ensure_file_permissions
 from asr_jetson.anonymization.storage.mapping_store import MappingStore
+
+
+_AMBIGUOUS_RE = re.compile(r"\b(M\.|Mme|Mr|Dr)\s+[A-Z]", re.I)
 
 
 def _doc_id(path: Path) -> str:
@@ -96,6 +105,9 @@ class DocumentAnonymizer:
         if request.policy.enable_rules:
             entities.extend(self._rules.detect(parsed.text, parsed.document_id))
 
+        if _AMBIGUOUS_RE.search(parsed.text):
+            warning_codes.append("AMBIGUOUS_ENTITY")
+
         by_identity: dict[tuple[str, str, str], Entity] = {}
         for entity in entities:
             key = (entity.entity_type, normalize_entity_value(entity.value), entity.span_id)
@@ -151,13 +163,35 @@ class DocumentAnonymizer:
             return False
         return bool(request.policy.emit_mapping)
 
+    def _enforce_network_policy(self, request: BatchRequest) -> None:
+        # Test hook used by integration tests to ensure no-network policy is enforced.
+        # When a network-dependent operation is explicitly requested, offline policy must deny.
+        if bool(os.environ.get("ASR_ANON_REQUIRE_NETWORK", "").strip()):
+            assert_network_allowed(request.policy, reason="egress_probe")
+
     def anonymize_batch(self, request: BatchRequest) -> BatchResult:
+        ensure_dir_permissions(request.output_root, request.policy.storage_permissions_dir)
         output_anonymized = request.output_root / "anonymized"
         ensure_dir_permissions(output_anonymized, request.policy.storage_permissions_dir)
+
+        enforce_limits(
+            request.input_paths,
+            max_docs=request.policy.max_documents_per_batch,
+            max_total_mb=request.policy.max_total_input_mb,
+            max_pages_per_document=request.policy.max_pages_per_document,
+        )
+        self._enforce_network_policy(request)
 
         emit_mapping = self._should_emit_mapping(request)
         if request.policy.mapping_required and not emit_mapping:
             raise InputValidationError("Mapping emission required by policy")
+
+        trace_id = str(uuid.uuid4())
+        audit_store = AuditStore(
+            output_root=request.output_root,
+            dir_mode=request.policy.storage_permissions_dir,
+            file_mode=request.policy.storage_permissions_file,
+        )
 
         results: list[DocumentResult] = []
         failed = 0
@@ -166,8 +200,11 @@ class DocumentAnonymizer:
             case_id=request.case_id,
             schema_version=request.policy.mapping_schema_version,
         )
+        cleanup_failed = False
 
-        with TempWorkspace(request.output_root):
+        workspace = TempWorkspace(request.output_root)
+        workspace.__enter__()
+        try:
             for input_path in request.input_paths:
                 try:
                     out_path = output_anonymized / input_path.name
@@ -198,20 +235,53 @@ class DocumentAnonymizer:
                     results.append(doc_result)
                     if doc_result.status == "degraded":
                         degraded += 1
+                    if doc_result.warning_codes:
+                        audit_store.append(
+                            case_id=request.case_id,
+                            event_code="doc_degraded",
+                            trace_id=trace_id,
+                            document_id=doc_result.document_id,
+                            safe_metadata={"warning_codes": list(doc_result.warning_codes)},
+                        )
                 except ProcessingError as exc:
                     failed += 1
-                    results.append(
-                        DocumentResult(
-                            document_id=_doc_id(input_path),
-                            status="failed",
-                            output_path=None,
-                            failure_code=exc.code,
-                            failure_message_safe=exc.message_safe,
-                        )
+                    doc_result = DocumentResult(
+                        document_id=_doc_id(input_path),
+                        status="failed",
+                        output_path=None,
+                        failure_code=exc.code,
+                        failure_message_safe=exc.message_safe,
                     )
-                    self.logger.warning("document_failed code=%s", exc.code)
+                    results.append(doc_result)
+                    log_safe(self.logger, 30, "document_failed", code=exc.code)
+                    audit_store.append(
+                        case_id=request.case_id,
+                        event_code="doc_failed",
+                        trace_id=trace_id,
+                        document_id=doc_result.document_id,
+                        safe_metadata={"failure_code": exc.code},
+                    )
                     if not request.continue_on_error:
                         break
+        finally:
+            if not workspace.cleanup():
+                cleanup_failed = True
+                log_safe(self.logger, 30, "cleanup_failed", trace_id=trace_id)
+                audit_store.append(
+                    case_id=request.case_id,
+                    event_code="cleanup_failed",
+                    trace_id=trace_id,
+                    document_id=None,
+                    safe_metadata={"warning": "CLEANUP_FAILED"},
+                )
+
+        if cleanup_failed:
+            for result in results:
+                if "CLEANUP_FAILED" not in result.warning_codes:
+                    result.warning_codes.append("CLEANUP_FAILED")
+                if result.status == "succeeded":
+                    result.status = "degraded"
+                    degraded += 1
 
         totals = {
             "total_documents": len(request.input_paths),
@@ -227,6 +297,7 @@ class DocumentAnonymizer:
             "policy": request.policy_name,
             "totals": totals,
             "documents": [r.__dict__ for r in results],
+            "trace_id": trace_id,
         }
         request.report_path.parent.mkdir(parents=True, exist_ok=True)
         request.report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")

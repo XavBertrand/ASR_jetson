@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from asr_jetson.anonymization.core.streaming import read_text_streaming
 from asr_jetson.anonymization.core.models import ParsedDocument, Span
 
 
 class TxtParser:
     def parse(self, input_path: Path, document_id: str) -> ParsedDocument:
-        text = input_path.read_text(encoding="utf-8")
+        text = read_text_streaming(input_path)
         span = Span(
             span_id=f"{document_id}:0",
             document_id=document_id,
