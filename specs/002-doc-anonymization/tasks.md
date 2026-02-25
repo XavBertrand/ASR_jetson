@@ -125,33 +125,33 @@
 
 ### Tests for User Story 3 (REQUIRED)
 
-- [ ] T050 [P] [US3] Implement integration test for default no-network policy and opt-in override in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_network_policy_integration.py
-- [ ] T051 [P] [US3] Implement integration test for batch resilience on single-document failure in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_batch_resilience_integration.py
-- [ ] T052 [P] [US3] Implement integration test for temp-file cleanup on success and failure in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_temp_cleanup_integration.py
-- [ ] T053 [P] [US3] Implement integration test for storage permission hardening in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_storage_permissions_integration.py
-- [ ] T054 [P] [US3] Implement unit test for telemetry/log sanitization behavior in /home/xavier/PycharmProjects/ASR_jetson/tests/unit/anonymization/test_safe_logging_unit.py
-- [ ] T055 [P] [US3] Implement API contract tests for anonymization job endpoints in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_api_contract.py
-- [ ] T056 [P] [US3] Implement Docker smoke test for anonymization CLI in /home/xavier/PycharmProjects/ASR_jetson/tests/smoke/test_anonymize_cli_docker.py
-- [ ] T073 [P] [US3] Implement API idempotency tests for job creation (same Idempotency-Key same payload => same job_id; same key different payload => 409) in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_api_idempotency_contract.py
-- [ ] T074 [P] [US3] Implement integration test to verify logs contain no sensitive PII snippets (scan captured logs for unique fixture tokens) in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_log_scrubbing_integration.py
-- [ ] T076 [P] [US3] Implement integration test for bounded-memory / chunked processing on large inputs (max-total-mb / max-pages) ensuring no full-document load when streaming is available in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_streaming_chunked_processing_integration.py
-- [ ] T086 [P] [US3] Implement API contract tests enforcing mapping access requires internal authorization (X-Internal-API-Key) in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_mapping_auth_contract.py
-- [ ] T087 [P] [US3] Implement integration test for concurrent runs with overlapping filenames across different case_id ensuring output separation and no collisions in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_concurrent_case_filename_collision_integration.py
-- [ ] T088 [P] [US3] Implement failure-injection test for temp cleanup errors verifying warning + audit event emission (sanitized) in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_cleanup_failure_injection_integration.py
-- [ ] T089 [P] [US3] Implement integration test for mixed-language + abbreviation PII handling (e.g., FR names + EN email patterns + partial identifiers) verifying correct redaction + warnings where ambiguous in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_mixed_language_abbreviations_integration.py
-- [ ] T090 [P] [US3] Implement integration test for malformed/corrupted document inputs (corrupt PDF/DOCX/XLSX) verifying safe failure codes, sanitized errors, and batch continuation in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_malformed_inputs_integration.py
+- [X] T050 [P] [US3] Implement integration test for default no-network policy and opt-in override in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_network_policy_integration.py
+- [X] T051 [P] [US3] Implement integration test for batch resilience on single-document failure in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_batch_resilience_integration.py
+- [X] T052 [P] [US3] Implement integration test for temp-file cleanup on success and failure in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_temp_cleanup_integration.py
+- [X] T053 [P] [US3] Implement integration test for storage permission hardening in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_storage_permissions_integration.py
+- [X] T054 [P] [US3] Implement unit test for telemetry/log sanitization behavior in /home/xavier/PycharmProjects/ASR_jetson/tests/unit/anonymization/test_safe_logging_unit.py
+- [X] T055 [P] [US3] Implement API contract tests for anonymization job endpoints in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_api_contract.py
+- [X] T056 [P] [US3] Implement Docker smoke test for anonymization CLI in /home/xavier/PycharmProjects/ASR_jetson/tests/smoke/test_anonymize_cli_docker.py
+- [X] T073 [P] [US3] Implement API idempotency tests for job creation (same Idempotency-Key same payload => same job_id; same key different payload => 409) in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_api_idempotency_contract.py
+- [X] T074 [P] [US3] Implement integration test to verify logs contain no sensitive PII snippets (scan captured logs for unique fixture tokens) in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_log_scrubbing_integration.py
+- [X] T076 [P] [US3] Implement integration test for bounded-memory / chunked processing on large inputs (max-total-mb / max-pages) ensuring no full-document load when streaming is available in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_streaming_chunked_processing_integration.py
+- [X] T086 [P] [US3] Implement API contract tests enforcing mapping access requires internal authorization (X-Internal-API-Key) in /home/xavier/PycharmProjects/ASR_jetson/tests/contract/test_anonymization_mapping_auth_contract.py
+- [X] T087 [P] [US3] Implement integration test for concurrent runs with overlapping filenames across different case_id ensuring output separation and no collisions in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_concurrent_case_filename_collision_integration.py
+- [X] T088 [P] [US3] Implement failure-injection test for temp cleanup errors verifying warning + audit event emission (sanitized) in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_cleanup_failure_injection_integration.py
+- [X] T089 [P] [US3] Implement integration test for mixed-language + abbreviation PII handling (e.g., FR names + EN email patterns + partial identifiers) verifying correct redaction + warnings where ambiguous in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_mixed_language_abbreviations_integration.py
+- [X] T090 [P] [US3] Implement integration test for malformed/corrupted document inputs (corrupt PDF/DOCX/XLSX) verifying safe failure codes, sanitized errors, and batch continuation in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/test_malformed_inputs_integration.py
 
 ### Implementation for User Story 3
 
-- [ ] T057 [P] [US3] Implement explicit network guard used by detectors/connectors in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/network_guard.py
-- [ ] T058 [US3] Implement resilient batch status aggregation and degraded warnings in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/service.py
-- [ ] T059 [P] [US3] Implement minimal non-sensitive audit event storage in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/storage/audit_store.py
-- [ ] T060 [US3] Implement internal API endpoints from contract in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/api/internal_routes.py
-- [ ] T061 [US3] Integrate anonymization policy/key env configuration with existing config models in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/config/config.py
-- [ ] T062 [US3] Integrate optional anonymization hook into existing pipeline without default behavior changes in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/pipeline/full_pipeline.py
-- [ ] T063 [US3] Add anonymization dependencies and non-breaking CLI container invocation support in /home/xavier/PycharmProjects/ASR_jetson/docker/Dockerfile
-- [ ] T064 [US3] Add Jetson-specific anonymization dependency and invocation support in /home/xavier/PycharmProjects/ASR_jetson/docker/Dockerfile.jetson
-- [ ] T077 [P] [US3] Implement streaming/chunked processing support where possible (TXT streaming, PDF page-iterator, XLSX row/worksheet iteration) and enforce bounded-memory limits in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/streaming.py
+- [X] T057 [P] [US3] Implement explicit network guard used by detectors/connectors in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/network_guard.py
+- [X] T058 [US3] Implement resilient batch status aggregation and degraded warnings in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/service.py
+- [X] T059 [P] [US3] Implement minimal non-sensitive audit event storage in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/storage/audit_store.py
+- [X] T060 [US3] Implement internal API endpoints from contract in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/api/internal_routes.py
+- [X] T061 [US3] Integrate anonymization policy/key env configuration with existing config models in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/config/config.py
+- [X] T062 [US3] Integrate optional anonymization hook into existing pipeline without default behavior changes in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/pipeline/full_pipeline.py
+- [X] T063 [US3] Add anonymization dependencies and non-breaking CLI container invocation support in /home/xavier/PycharmProjects/ASR_jetson/docker/Dockerfile
+- [X] T064 [US3] Add Jetson-specific anonymization dependency and invocation support in /home/xavier/PycharmProjects/ASR_jetson/docker/Dockerfile.jetson
+- [X] T077 [P] [US3] Implement streaming/chunked processing support where possible (TXT streaming, PDF page-iterator, XLSX row/worksheet iteration) and enforce bounded-memory limits in /home/xavier/PycharmProjects/ASR_jetson/src/asr_jetson/anonymization/core/streaming.py
 
 **Checkpoint**: US3 is independently testable and compliant.
 
@@ -161,20 +161,20 @@
 
 **Purpose**: Finalize docs, performance checks, and full-system validation.
 
-- [ ] T065 [P] Update anonymization usage and security configuration docs in /home/xavier/PycharmProjects/ASR_jetson/README.md
-- [ ] T066 [P] Add/refresh quickstart verification steps for operators in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
-- [ ] T067 Validate end-to-end regression run for new anonymization test suites in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/
-- [ ] T068 Validate Docker-based CLI smoke workflow and document command examples in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md and /home/xavier/PycharmProjects/ASR_jetson/README.md
-- [ ] T069 Validate zero-sensitive telemetry and no-network defaults from runtime logs in /home/xavier/PycharmProjects/ASR_jetson/outputs/
-- [ ] T075 [P] Document API idempotency usage (Idempotency-Key) and error codes (409/422) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
-- [ ] T078 [P] Update and verify dependency lockfiles (uv.lock) after adding anonymization deps; add CI check ensuring lock is up-to-date in /home/xavier/PycharmProjects/ASR_jetson/uv.lock and /home/xavier/PycharmProjects/ASR_jetson/.github/workflows/
-- [ ] T079 [P] Validate reproducible Docker builds (pinned base image digest where feasible + deterministic dependency install) and document exact build command + checksum evidence in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
-- [ ] T080 [P] Add performance benchmark test for NFR-001 using a fixed fixture dataset + defined hardware profile (CPU/RAM, concurrency) with pass criteria (95% < 5 minutes) in /home/xavier/PycharmProjects/ASR_jetson/tests/perf/test_anonymization_nfr001_benchmark.py
-- [ ] T081 [P] Document “standard operating load” (hardware/concurrency/dataset) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md and reference it from benchmark docs
-- [ ] T084 [P] Document mapping authorization boundary (X-Internal-API-Key, failure behavior) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
+- [X] T065 [P] Update anonymization usage and security configuration docs in /home/xavier/PycharmProjects/ASR_jetson/README.md
+- [X] T066 [P] Add/refresh quickstart verification steps for operators in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
+- [X] T067 Validate end-to-end regression run for new anonymization test suites in /home/xavier/PycharmProjects/ASR_jetson/tests/integration/anonymization/
+- [X] T068 Validate Docker-based CLI smoke workflow and document command examples in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md and /home/xavier/PycharmProjects/ASR_jetson/README.md
+- [X] T069 Validate zero-sensitive telemetry and no-network defaults from runtime logs in /home/xavier/PycharmProjects/ASR_jetson/outputs/
+- [X] T075 [P] Document API idempotency usage (Idempotency-Key) and error codes (409/422) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
+- [X] T078 [P] Update and verify dependency lockfiles (uv.lock) after adding anonymization deps; add CI check ensuring lock is up-to-date in /home/xavier/PycharmProjects/ASR_jetson/uv.lock and /home/xavier/PycharmProjects/ASR_jetson/.github/workflows/
+- [X] T079 [P] Validate reproducible Docker builds (pinned base image digest where feasible + deterministic dependency install) and document exact build command + checksum evidence in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
+- [X] T080 [P] Add performance benchmark test for NFR-001 using a fixed fixture dataset + defined hardware profile (CPU/RAM, concurrency) with pass criteria (95% < 5 minutes) in /home/xavier/PycharmProjects/ASR_jetson/tests/perf/test_anonymization_nfr001_benchmark.py
+- [X] T081 [P] Document “standard operating load” (hardware/concurrency/dataset) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md and reference it from benchmark docs
+- [X] T084 [P] Document mapping authorization boundary (X-Internal-API-Key, failure behavior) in /home/xavier/PycharmProjects/ASR_jetson/specs/002-doc-anonymization/quickstart.md
 - [X] T091 [P] [US1] Add explicit US1 acceptance gate script (run CLI on fixtures, verify golden outputs + PDF non-recoverability) in /home/xavier/PycharmProjects/ASR_jetson/tests/acceptance/run_us1_gate.sh
 - [X] T092 [P] [US2] Add explicit US2 acceptance gate script (determinism + cross-case isolation + mapping decrypt with auth) in /home/xavier/PycharmProjects/ASR_jetson/tests/acceptance/run_us2_gate.sh
-- [ ] T093 [P] [US3] Add explicit US3 acceptance gate script (no-network, no-sensitive-logs, cleanup, permissions, streaming bounds) in /home/xavier/PycharmProjects/ASR_jetson/tests/acceptance/run_us3_gate.sh
+- [X] T093 [P] [US3] Add explicit US3 acceptance gate script (no-network, no-sensitive-logs, cleanup, permissions, streaming bounds) in /home/xavier/PycharmProjects/ASR_jetson/tests/acceptance/run_us3_gate.sh
 
 ---
 
@@ -258,4 +258,3 @@ T057, T059
 1. Team completes Phase 1-2 together.
 2. One stream drives US1 MVP.
 3. Additional streams implement US2/US3 once foundational interfaces stabilize.
-

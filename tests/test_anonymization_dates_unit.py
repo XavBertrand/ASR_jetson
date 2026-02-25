@@ -6,8 +6,8 @@ import re
 
 import pytest
 
-from src.asr_jetson.postprocessing import mistral_client
-from src.asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
+from asr_jetson.postprocessing import mistral_client
+from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
