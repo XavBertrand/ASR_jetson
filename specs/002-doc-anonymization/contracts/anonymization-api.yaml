@@ -1,0 +1,320 @@
+openapi: 3.0.3
+info:
+  title: ASR Jetson Internal Document Anonymization API
+  version: 0.2.0
+  description: |
+    Internal API contract for CLI/webapp integration over the shared DocumentAnonymizer service.
+servers:
+  - url: /internal
+paths:
+  /v1/anonymization/jobs:
+    post:
+      summary: Create a batch anonymization job
+      operationId: createAnonymizationJob
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional idempotency key to avoid duplicate job creation on retries.
+            Same key + same payload should return the same job_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateJobRequest'
+      responses:
+        '202':
+          description: accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAcceptedResponse'
+        '400':
+          description: invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: conflict (idempotency key reuse with different payload)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: validation error (policy/limits/input)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: internal error (sanitized)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/anonymization/jobs/{job_id}:
+    get:
+      summary: Get job status and aggregate report
+      operationId: getAnonymizationJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: status payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatusResponse'
+        '404':
+          description: unknown job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: internal error (sanitized)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/anonymization/jobs/{job_id}/documents/{document_id}:
+    get:
+      summary: Get document-level status
+      operationId: getAnonymizationDocument
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: document status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentStatusResponse'
+        '404':
+          description: unknown document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: internal error (sanitized)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/anonymization/mappings/resolve:
+    post:
+      summary: Resolve one encrypted mapping inside trusted boundary
+      operationId: resolveAnonymizationMapping
+      security:
+        - internalApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [case_id, document_id, mapping_path]
+              properties:
+                case_id:
+                  type: string
+                document_id:
+                  type: string
+                mapping_path:
+                  type: string
+      responses:
+        '200':
+          description: mapping resolved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, mapping]
+                properties:
+                  status:
+                    type: string
+                    enum: [resolved]
+                  mapping:
+                    type: object
+                    additionalProperties:
+                      type: string
+        '403':
+          description: missing/invalid internal credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: mapping unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: mapping unreadable/tampered or key mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: internal error (sanitized)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    CreateJobRequest:
+      type: object
+      required:
+        - case_id
+        - policy
+        - inputs
+        - output_root
+      properties:
+        case_id:
+          type: string
+        policy:
+          type: string
+          description: Policy profile name. Defaults in config are no-network.
+        output_root:
+          type: string
+        report_path:
+          type: string
+        mapping_mode:
+          type: string
+          enum: [auto, always, never]
+          default: auto
+        continue_on_error:
+          type: boolean
+          default: true
+        inputs:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/DocumentInput'
+        request_id:
+          type: string
+          description: Optional client-generated request id for correlation (safe to log).
+    DocumentInput:
+      type: object
+      required: [document_id, path]
+      properties:
+        document_id:
+          type: string
+        path:
+          type: string
+        format:
+          type: string
+          enum: [pdf, docx, xlsx, txt]
+    JobAcceptedResponse:
+      type: object
+      required: [job_id, status, case_id]
+      properties:
+        job_id:
+          type: string
+        status:
+          type: string
+          enum: [accepted]
+        case_id:
+          type: string
+    JobStatusResponse:
+      type: object
+      required: [job_id, case_id, status, totals, documents, report_path]
+      properties:
+        job_id:
+          type: string
+        case_id:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, completed_with_errors, failed]
+        totals:
+          $ref: '#/components/schemas/Totals'
+        report_path:
+          type: string
+        documents:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentStatusResponse'
+        network_mode:
+          type: string
+          enum: [ offline, online ]
+          description: Derived from policy; offline by default.
+    Totals:
+      type: object
+      required: [total_documents, succeeded, failed, degraded]
+      properties:
+        total_documents:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        degraded:
+          type: integer
+    DocumentStatusResponse:
+      type: object
+      required: [document_id, status]
+      properties:
+        document_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, succeeded, degraded, failed]
+        warning_codes:
+          type: array
+          items:
+            type: string
+        failure_code:
+          type: string
+        failure_message_safe:
+          type: string
+          description: Sanitized error message with no sensitive text.
+        output_path:
+          type: string
+        mapping_path:
+          type: string
+        format:
+          type: string
+          enum: [pdf, docx, xlsx, txt]
+    ErrorResponse:
+      type: object
+      required: [ code, message_safe ]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        message_safe:
+          type: string
+          description: Sanitized message with no sensitive text.
+        details_safe:
+          type: object
+          additionalProperties: true
+          description: Optional sanitized details (no paths with user names, no snippets).
+        trace_id:
+          type: string
+          description: Optional correlation id for support/troubleshooting.
+  securitySchemes:
+    internalApiKey:
+      type: apiKey
+      in: header
+      name: X-Internal-API-Key

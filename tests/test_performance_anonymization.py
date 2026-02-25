@@ -3,7 +3,7 @@ Test de performance pour l'anonymiseur Transformer
 Vérifie les corrections des bugs identifiés
 """
 
-from src.asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
+from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 from unidecode import unidecode
 
 

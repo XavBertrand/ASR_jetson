@@ -150,6 +150,7 @@ COPY --from=builder /build/pyproject.toml /build/README.md ./
 
 # Copie des fichiers de l'application
 COPY --chown=appuser:appuser ./scripts ./scripts
+RUN chmod +x /app/scripts/entrypoint.sh
 
 # Configuration
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -178,5 +179,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python3", "src/pipeline/full_pipeline.py"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/scripts/entrypoint.sh"]
+CMD ["asr-pipeline", "--help"]

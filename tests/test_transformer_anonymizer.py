@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from unidecode import unidecode
 
-from src.asr_jetson.postprocessing.transformer_anonymizer import (
+from asr_jetson.postprocessing.transformer_anonymizer import (
     TransformerAnonymizer,
     run_transformer_anonymization
 )

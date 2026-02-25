@@ -63,13 +63,16 @@ dependencies = [
   "sentencepiece>=0.2.1",
   "tokenizers>=0.20,<0.21",
   "mistralai>=1.9.11",
-  "docx-python>=0.1.0",
   "pypandoc-binary>=1.15",
   "sacremoses>=0.1.1",
   "pypandoc>=1.15",
   "gliner>=0.2.22",
   "weasyprint>=67.0",
   "pytest-cov>=7.0.0",
+  "pymupdf>=1.26.4",
+  "openpyxl>=3.1.5",
+  "cryptography>=45.0.0",
+  "lxml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -111,6 +114,7 @@ Repository = "https://github.com/XavBertrand/ASR_jetson"
 Issues = "https://github.com/XavBertrand/ASR_jetson/issues"
 
 [project.scripts]
+asr = "asr_jetson.cli:main"
 asr-pipeline = "asr_jetson.pipeline.cli:main"
 
 [tool.setuptools]

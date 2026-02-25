@@ -34,3 +34,12 @@
 ## Configuration & Secrets
 - `HUGGINGFACE_TOKEN` is required for private Pyannote pipelines.
 - `MISTRAL_API_KEY` is required if meeting reports are enabled.
+
+## Active Technologies
+- Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; planned additions `pymupdf` (PDF redaction), `openpyxl` (XLSX), `cryptography` (AEAD), `lxml` (DOCX XML metadata edits) (002-doc-anonymization)
+- filesystem artifacts under feature-specific output root; encrypted mapping files plus minimal audit events (002-doc-anonymization)
+- Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; additions `pymupdf`, `openpyxl`, `cryptography`, `lxml` (002-doc-anonymization)
+- local filesystem artifacts under feature output root (`anonymized/`, `reports/`, optional encrypted `mappings/`, minimal `audit/`) with restricted permissions (002-doc-anonymization)
+
+## Recent Changes
+- 002-doc-anonymization: Added Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; planned additions `pymupdf` (PDF redaction), `openpyxl` (XLSX), `cryptography` (AEAD), `lxml` (DOCX XML metadata edits)
