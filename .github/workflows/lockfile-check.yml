@@ -1,0 +1,32 @@
+name: Lockfile Check
+
+on:
+  pull_request:
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/lockfile-check.yml
+  push:
+    branches: [ master, develop ]
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/lockfile-check.yml
+
+jobs:
+  uv-lock-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Verify uv.lock is up to date
+        run: uv lock --check

@@ -1,0 +1,31 @@
+profiles:
+  strict_offline:
+    allow_network: false
+    enable_ner: true
+    enable_regex: true
+    enable_rules: true
+    continue_on_error: true
+    emit_mapping: false
+    mapping_required: false
+    max_documents_per_batch: 500
+    max_pages_per_document: 1000
+    max_total_input_mb: 1024
+    mapping_schema_version: "1.0"
+    report_schema_version: "1.0"
+    storage_permissions_dir: "0700"
+    storage_permissions_file: "0600"
+  online_opt_in:
+    allow_network: true
+    enable_ner: true
+    enable_regex: true
+    enable_rules: true
+    continue_on_error: true
+    emit_mapping: true
+    mapping_required: false
+    max_documents_per_batch: 500
+    max_pages_per_document: 1000
+    max_total_input_mb: 1024
+    mapping_schema_version: "1.0"
+    report_schema_version: "1.0"
+    storage_permissions_dir: "0700"
+    storage_permissions_file: "0600"
