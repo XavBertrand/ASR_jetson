@@ -1,0 +1,29 @@
+# Compte rendu d'entretien
+
+### Contexte
+Bleu Horizon Partners a organise la reunion avec Bleu Horizon Industries.
+
+### Participants
+- Pauline Blanc
+- Lucas Adam
+
+### Objectifs
+Montfleury Conseil souhaite clarifier les priorites avec Bleu Horizon Partners.
+
+### Discussion
+Bleu Horizon Industries partage un point de vue complete.
+
+### Decisions
+Pauline Blanc valide la proposition apres discussion avec Montfleury Conseil.
+
+### Actions
+Lucas Adam enverra un suivi a Bleu Horizon Partners et Bleu Horizon Industries.
+
+### Annexes
+| Pseudonyme | Canonique |
+| --- | --- |
+| Bleu Horizon Partners | Udaf |
+| Bleu Horizon Industries | Detail Group |
+| Pauline Blanc | Françoise |
+| Montfleury Conseil | Migmeca |
+| Lucas Adam | Françoise |
