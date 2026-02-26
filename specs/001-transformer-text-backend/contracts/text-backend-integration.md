@@ -24,9 +24,13 @@ Define the single allowed backend contract for ASR pipeline text anonymization.
 ## Behavioral Requirements
 
 1. Pipeline text anonymization MUST invoke the canonical callable above.
-2. Pipeline text anonymization MUST NOT invoke any parallel text anonymizer backend.
-3. Existing document anonymization behaviors for PDF/DOCX/XLSX are out of scope and unchanged.
-4. Existing downstream usage of returned mapping/report generation must remain compatible.
+2. In nominal mode, pipeline text anonymization MUST NOT invoke any parallel text anonymizer backend.
+3. In degraded mode (ImportError/init failure), regex-only fallback is permitted and MUST emit warning:
+   - `warning_code`: `NER_UNAVAILABLE_REGEX_FALLBACK`
+   - `warning_level`: `WARNING`
+   - `warning_message`: `NER unavailable => regex-only fallback`
+4. Existing document anonymization behaviors for PDF/DOCX/XLSX are out of scope and unchanged.
+5. Existing downstream usage of returned mapping/report generation must remain compatible.
 
 ## Error Contract
 

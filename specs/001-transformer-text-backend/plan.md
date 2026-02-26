@@ -134,3 +134,14 @@ Planned implementation slices:
 ## Complexity Tracking
 
 No constitution violations requiring justification.
+
+## Implementation Sync Notes (Post-Execution)
+
+- Canonical backend invocation is enforced through `anonymize_text_via_backend(...)` in `src/asr_jetson/pipeline/full_pipeline.py`.
+- Nominal mode does not use any parallel text anonymizer call path.
+- Degraded mode is restricted to regex-only fallback on ImportError/init failure with canonical warning contract:
+  - `warning_code`: `NER_UNAVAILABLE_REGEX_FALLBACK`
+  - `warning_level`: `WARNING`
+  - `warning_message`: `NER unavailable => regex-only fallback`
+- Runtime backend execution exceptions hard-fail with sanitized actionable errors (no raw transcript leak).
+- PDF/DOCX/XLSX behavior remains covered by non-goal regression gates and unchanged code paths.

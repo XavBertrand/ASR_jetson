@@ -33,11 +33,18 @@ from asr_jetson.postprocessing.meeting_report import (
     format_meeting_date_literal,
     generate_pdf_report,
 )
-from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 from asr_jetson.postprocessing import mistral_client
 from asr_jetson.anonymization.core.models import BatchRequest
 from asr_jetson.anonymization.core.policy import load_policy as load_anonymization_policy
 from asr_jetson.anonymization.core.service import DocumentAnonymizer
+from asr_jetson.pipeline.text_backend_adapter import (
+    CANONICAL_BACKEND_CALLABLE,
+    TextBackendRuntimeFailure,
+    anonymize_text_via_backend,
+    assert_canonical_callable_path,
+    normalize_entity_label,
+)
+from asr_jetson.pipeline.text_backend_contract import TextAnonymizationRequest, TextAnonymizationResult
 
 
 # --- Helpers ---
@@ -518,6 +525,25 @@ def _extract_context_names(text: str) -> List[str]:
     return names
 
 
+def _anonymize_text_via_backend(
+    *,
+    text: str,
+    domain_entities: Dict[str, List[str]] | None,
+    cfg: "PipelineConfig",
+    case_id: str,
+) -> TextAnonymizationResult:
+    assert_canonical_callable_path(CANONICAL_BACKEND_CALLABLE)
+    request = TextAnonymizationRequest(
+        text=text,
+        domain_entities=domain_entities,
+        preserve_dates=cfg.anon_preserve_dates,
+        model_name=cfg.anon_model,
+        device=_resolve_transformers_device(cfg.anon_device),
+        case_id=case_id,
+    )
+    return anonymize_text_via_backend(request)
+
+
 def _run_postprocessing(
     *,
     base_text_path: Path,
@@ -573,20 +599,36 @@ def _run_postprocessing(
                 label = entry.get("label") or cfg.anon_catalog_label
                 if cfg.anon_catalog_as_person:
                     label = "PERSON"
-                normalized = TransformerAnonymizer._normalize_type(label)
+                normalized = normalize_entity_label(label)
                 tmp.setdefault(normalized, set()).add(pattern.strip())
             domain_entities = {label: sorted(values) for label, values in tmp.items() if values}
 
-        anonymizer = TransformerAnonymizer(
-            model_name=cfg.anon_model,
-            domain_entities=domain_entities or None,
-            preserve_dates=cfg.anon_preserve_dates,
-            device=_resolve_transformers_device(cfg.anon_device),
-        )
-        anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
+        try:
+            backend_result = _anonymize_text_via_backend(
+                text=base_text,
+                domain_entities=domain_entities or None,
+                cfg=cfg,
+                case_id=run_id,
+            )
+        except TextBackendRuntimeFailure as exc:
+            raise RuntimeError(
+                f"Text anonymization failed during backend execution. {exc}"
+            ) from exc
+        anonymized_text, mapping = backend_result.anonymized_text, backend_result.mapping
 
         if speaker_context_hint:
-            context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
+            try:
+                context_result = _anonymize_text_via_backend(
+                    text=speaker_context_hint,
+                    domain_entities=domain_entities or None,
+                    cfg=cfg,
+                    case_id=run_id,
+                )
+            except TextBackendRuntimeFailure as exc:
+                raise RuntimeError(
+                    f"Text anonymization failed during speaker-context backend execution. {exc}"
+                ) from exc
+            context_anonymized, context_mapping = context_result.anonymized_text, context_result.mapping
             mapping = _merge_anonymization_mappings(mapping, context_mapping)
             speaker_context_anon = context_anonymized
             context_names = _extract_context_names(speaker_context_hint)
@@ -595,6 +637,28 @@ def _run_postprocessing(
                 mapping["context_names"] = list(existing_context) + [
                     name for name in context_names if name not in existing_context
                 ]
+
+            if context_result.warnings:
+                mapping.setdefault("warnings", [])
+                mapping["warnings"].extend(
+                    {
+                        "warning_code": item.warning_code,
+                        "warning_level": item.warning_level,
+                        "warning_message": item.warning_message,
+                    }
+                    for item in context_result.warnings
+                )
+
+        if backend_result.warnings:
+            mapping.setdefault("warnings", [])
+            mapping["warnings"].extend(
+                {
+                    "warning_code": item.warning_code,
+                    "warning_level": item.warning_level,
+                    "warning_message": item.warning_message,
+                }
+                for item in backend_result.warnings
+            )
 
         corrected_text = mapping.get("corrected_text")
         if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
@@ -618,15 +682,16 @@ def _run_postprocessing(
             json.dumps(mapping, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-
-    else:
-        # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
+    elif not cfg.anonymize:
+        # anonymize=False -> no backend call
         out_txt_anon.write_text(base_text, encoding="utf-8")
         out_txt_anon_clean.write_text(base_text, encoding="utf-8")
         out_mapping_json.write_text("{}", encoding="utf-8")
         out_txt_clean.write_text(base_text, encoding="utf-8")
         if speaker_context_hint:
             speaker_context_anon = speaker_context_hint
+    else:
+        raise RuntimeError("Unexpected anonymization branch state.")
 
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts

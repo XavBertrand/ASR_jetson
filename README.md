@@ -15,6 +15,7 @@ Local end-to-end pipeline: audio ingestion → optional RNNoise denoise → Pyan
 - Diarization with Pyannote (`diarization/pipeline_diarization.py`) then ASR with Faster-Whisper (`asr/whisper_engine.py`, `asr/transcribe.py`).
 - Exports JSON, SRT, dialogue TXT, anonymized variants + mapping, meeting reports (MD/PDF/DOCX).
 - Anonymization via `postprocessing/transformer_anonymizer.py`; optional LLM clean (`postprocessing/llm_clean.py`).
+- ASR pipeline text anonymization uses the canonical backend entrypoint `asr_jetson.postprocessing.transformer_anonymizer.run_transformer_anonymization` (no parallel text anonymizer in nominal mode).
 - Mistral-powered reports using `postprocessing/meeting_report.py` and prompts in `config/mistral_prompts.json`.
 
 ---

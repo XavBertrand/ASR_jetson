@@ -1379,17 +1379,38 @@ class TransformerAnonymizer:
         return False
 
 
+class TransformerBackendInitializationError(RuntimeError):
+    """Raised when the canonical transformer backend cannot be initialized."""
+
+
+class TransformerBackendRuntimeError(RuntimeError):
+    """Raised when anonymization execution fails after successful initialization."""
+
+
 def run_transformer_anonymization(
     text: str,
     domain_entities: Dict[str, List[str]] | None = None,
     *,
     preserve_dates: bool = True,
+    model_name: str = "urchade/gliner_multi_pii-v1",
+    device: int | str | None = "cuda",
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    Point d'entrée simple, compatible avec run_presidio_anonymization()
+    Point d'entrée canonique pour l'anonymisation texte du pipeline ASR.
     """
-    anonymizer = TransformerAnonymizer(
-        domain_entities=domain_entities,
-        preserve_dates=preserve_dates,
-    )
-    return anonymizer.anonymize_with_tags(text)
+    try:
+        anonymizer = TransformerAnonymizer(
+            model_name=model_name,
+            domain_entities=domain_entities,
+            preserve_dates=preserve_dates,
+            device=device,
+        )
+    except ImportError:
+        raise
+    except Exception as exc:
+        raise TransformerBackendInitializationError(str(exc)) from exc
+
+    try:
+        return anonymizer.anonymize_with_tags(text)
+    except Exception as exc:
+        raise TransformerBackendRuntimeError(str(exc)) from exc
