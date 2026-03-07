@@ -96,7 +96,7 @@ wheels = [
 
 [[package]]
 name = "asr-jetson"
-version = "0.7.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "audioread", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
