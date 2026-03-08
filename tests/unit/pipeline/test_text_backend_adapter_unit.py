@@ -15,7 +15,7 @@ def test_adapter_nominal_uses_canonical_backend(monkeypatch: pytest.MonkeyPatch)
 
     def _fake_run(*args, **kwargs):
         return (
-            "<PERSON_001>",
+            "Alice Bertrand",
             {
                 "entities": {
                     "<PERSON_001>": {
@@ -39,9 +39,8 @@ def test_adapter_nominal_uses_canonical_backend(monkeypatch: pytest.MonkeyPatch)
 
     assert result.mode == "nominal"
     assert result.warnings == []
-    assert result.anonymized_text != "<PERSON_001>"
-    assert "<PERSON_" in result.anonymized_text
-    assert result.mapping["pseudonym_map"]["<PERSON_001>"] == result.anonymized_text
+    assert result.anonymized_text == "Alice Bertrand"
+    assert result.mapping["pseudonym_map"]["<PERSON_001>"] == "<PERSON_001>"
 
 
 @pytest.mark.unit

@@ -58,84 +58,6 @@ def _sanitize_runtime_failure(prefix: str, exc: Exception) -> str:
     return f"{prefix} ({exc_type}). Check backend dependencies/model availability."
 
 
-def _namespace_nominal_placeholders(
-    anonymized_text: str,
-    mapping: dict[str, Any],
-    *,
-    case_id: str,
-) -> tuple[str, dict[str, Any]]:
-    entities = mapping.get("entities")
-    pseudonym_map = mapping.get("pseudonym_map")
-    pseudonym_reverse_map = mapping.get("pseudonym_reverse_map")
-    reverse_map = mapping.get("reverse_map")
-    if not isinstance(entities, dict) or not isinstance(pseudonym_map, dict):
-        return anonymized_text, mapping
-
-    token_meta: dict[str, tuple[str, str]] = {}
-    for tag, info in entities.items():
-        if not isinstance(info, dict):
-            continue
-        old_token = info.get("pseudonym") or pseudonym_map.get(tag)
-        if not isinstance(old_token, str) or not old_token:
-            continue
-        label = normalize_entity_label(str(info.get("label", "MISC")))
-        canonical = info.get("canonical")
-        if not isinstance(canonical, str) or not canonical:
-            canonical = reverse_map.get(tag) if isinstance(reverse_map, dict) else old_token
-        token_meta[old_token] = (label, canonical)
-
-    if isinstance(pseudonym_reverse_map, dict):
-        for old_token, canonical in pseudonym_reverse_map.items():
-            if not isinstance(old_token, str) or not old_token:
-                continue
-            if old_token in token_meta:
-                continue
-            canonical_value = canonical if isinstance(canonical, str) and canonical else old_token
-            token_meta[old_token] = ("MISC", canonical_value)
-
-    if not token_meta:
-        return anonymized_text, mapping
-
-    alias_map: dict[str, str] = {}
-    used_tokens: set[str] = set()
-    for old_token, (label, canonical) in sorted(token_meta.items()):
-        candidate = _placeholder(label, canonical, case_id)
-        if candidate in used_tokens and old_token not in alias_map:
-            candidate = _placeholder(label, f"{canonical}|{old_token}", case_id)
-        alias_map[old_token] = candidate
-        used_tokens.add(candidate)
-
-    transformed_text = anonymized_text
-    for old_token, new_token in sorted(alias_map.items(), key=lambda item: len(item[0]), reverse=True):
-        transformed_text = transformed_text.replace(old_token, new_token)
-
-    transformed_mapping = dict(mapping)
-    if isinstance(pseudonym_map, dict):
-        transformed_mapping["pseudonym_map"] = {
-            str(tag): alias_map.get(token, token)
-            for tag, token in pseudonym_map.items()
-        }
-    if isinstance(pseudonym_reverse_map, dict):
-        transformed_mapping["pseudonym_reverse_map"] = {
-            alias_map.get(token, token): value
-            for token, value in pseudonym_reverse_map.items()
-        }
-
-    updated_entities: dict[str, Any] = {}
-    for tag, info in entities.items():
-        if not isinstance(info, dict):
-            updated_entities[str(tag)] = info
-            continue
-        item = dict(info)
-        old_token = item.get("pseudonym")
-        if isinstance(old_token, str):
-            item["pseudonym"] = alias_map.get(old_token, old_token)
-        updated_entities[str(tag)] = item
-    transformed_mapping["entities"] = updated_entities
-
-    return transformed_text, transformed_mapping
-
-
 def _regex_only_fallback(
     text: str,
     *,
@@ -230,14 +152,10 @@ def anonymize_text_via_backend(request: TextAnonymizationRequest) -> TextAnonymi
             model_name=request.model_name,
             device=request.device,
         )
-        namespaced_text, namespaced_mapping = _namespace_nominal_placeholders(
-            anonymized_text,
-            mapping if isinstance(mapping, dict) else {},
-            case_id=case_id,
-        )
+        safe_mapping = mapping if isinstance(mapping, dict) else {}
         return TextAnonymizationResult(
-            anonymized_text=namespaced_text,
-            mapping=namespaced_mapping,
+            anonymized_text=anonymized_text,
+            mapping=safe_mapping,
             warnings=[],
             mode="nominal",
         )

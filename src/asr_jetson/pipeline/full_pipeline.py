@@ -499,7 +499,35 @@ _CONTEXT_NAME_STOPWORDS = {
     "m.",
     "mme",
     "mlle",
+    "rendez",
+    "vous",
+    "entre",
 }
+_CONTEXT_NAME_TITLE_PREFIXES = {
+    "m",
+    "m.",
+    "mme",
+    "mme.",
+    "mlle",
+    "mlle.",
+    "monsieur",
+    "madame",
+    "mademoiselle",
+    "maitre",
+    "maître",
+    "me",
+}
+_CONTEXT_NAME_TITLE_CONTEXT_RE = re.compile(
+    r"(?:\bM\.?\s+|\bMme\.?\s+|\bMlle\.?\s+|\bMonsieur\s+|\bMadame\s+|\bMaitre\s+|\bMaître\s+|\bMe\s+)$"
+)
+_REPORT_PLACEHOLDER_RE = re.compile(r"<[A-Z]+_[A-Z0-9]{3,}>")
+_REPORT_PLACEHOLDER_GUARDRAIL = (
+    "IMPORTANT ANONYMISATION:\n"
+    "- Les tokens de la forme `<TYPE_...>` sont les pseudonymes de référence.\n"
+    "- Recopie chaque token strictement à l'identique (même orthographe, mêmes chevrons).\n"
+    "- N'invente aucun prénom/nom/organisation alternatif.\n"
+    "- N'efface, ne fusionne et ne renomme aucun token."
+)
 
 
 def _extract_context_names(text: str) -> List[str]:
@@ -509,20 +537,36 @@ def _extract_context_names(text: str) -> List[str]:
         candidate = match.group(0).strip(" ,;:")
         if not candidate:
             continue
-        tokens = [token for token in candidate.split() if token]
+        raw_tokens = [token for token in candidate.split() if token]
+        tokens = list(raw_tokens)
         if not tokens:
             continue
+        had_title_prefix = bool(
+            raw_tokens
+            and raw_tokens[0].lower().strip(".,;:") in _CONTEXT_NAME_TITLE_PREFIXES
+        )
+        if not had_title_prefix:
+            context_prefix = (text or "")[max(0, match.start() - 16) : match.start()]
+            had_title_prefix = bool(_CONTEXT_NAME_TITLE_CONTEXT_RE.search(context_prefix))
         while tokens and tokens[0].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
             tokens.pop(0)
         while tokens and tokens[-1].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
             tokens.pop()
         if not tokens:
             continue
+        if len(tokens) == 1 and not had_title_prefix:
+            continue
         cleaned = " ".join(tokens)
         if cleaned not in seen:
             names.append(cleaned)
             seen.add(cleaned)
     return names
+
+
+def _compose_report_user_text(user_prefix: str, anonymized_payload: str) -> str:
+    if _REPORT_PLACEHOLDER_RE.search(anonymized_payload):
+        return f"{user_prefix}\n{_REPORT_PLACEHOLDER_GUARDRAIL}\n\n{anonymized_payload}"
+    return user_prefix + anonymized_payload
 
 
 def _anonymize_text_via_backend(
@@ -711,10 +755,11 @@ def _run_postprocessing(
             )
         meeting_date_label = format_meeting_date_literal(meeting_date)
         user_prefix = prompt.user_prefix.format(meeting_date=meeting_date_label)
+        user_text = _compose_report_user_text(user_prefix, anonymized_payload)
         analysis_anonymized = mistral_client.chat_complete(
             model=prompt.model,
             system=prompt.system,
-            user_text=user_prefix + anonymized_payload,
+            user_text=user_text,
             temperature=0.1,
         )
 

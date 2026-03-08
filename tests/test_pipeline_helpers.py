@@ -128,3 +128,31 @@ def test_resolve_transformers_device(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fp.torch.cuda, "is_available", lambda: False)
     assert fp._resolve_transformers_device("cuda") == -1
     assert fp._resolve_transformers_device("0") == 0
+
+
+@pytest.mark.unit
+def test_extract_context_names_ignores_non_name_prefix_words() -> None:
+    text = (
+        "Rendez vous entre Delphine Heinrich-Bertrand, avocat "
+        "et M. Iche, client particulier"
+    )
+    names = fp._extract_context_names(text)
+    assert names == ["Delphine Heinrich-Bertrand", "Iche"]
+
+
+@pytest.mark.unit
+def test_compose_report_user_text_adds_guardrail_when_placeholders_present() -> None:
+    user_prefix = "DATE DE L'ENTRETIEN : 5 mars 2026\n"
+    payload = "SPEAKER_1 : <PERSON_A1B2C3D4> rencontre <ORGANIZATION_1234ABCD>."
+    user_text = fp._compose_report_user_text(user_prefix, payload)
+    assert "IMPORTANT ANONYMISATION" in user_text
+    assert "Recopie chaque token strictement" in user_text
+    assert user_text.endswith(payload)
+
+
+@pytest.mark.unit
+def test_compose_report_user_text_keeps_legacy_behavior_without_placeholders() -> None:
+    user_prefix = "DATE DE L'ENTRETIEN : 5 mars 2026\n"
+    payload = "SPEAKER_1 : Bonjour."
+    user_text = fp._compose_report_user_text(user_prefix, payload)
+    assert user_text == user_prefix + payload

@@ -14,7 +14,7 @@ def _request(case_id: str) -> TextAnonymizationRequest:
 
 
 @pytest.mark.integration
-def test_nominal_mode_same_case_deterministic_and_cross_case_isolated(
+def test_nominal_mode_passes_through_backend_output_without_case_rewrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from asr_jetson.postprocessing import transformer_anonymizer as transformer_module
@@ -51,7 +51,8 @@ def test_nominal_mode_same_case_deterministic_and_cross_case_isolated(
 
     assert same_a.anonymized_text == same_b.anonymized_text
     assert same_a.mapping == same_b.mapping
-    assert same_a.anonymized_text != other.anonymized_text
+    assert same_a.anonymized_text == other.anonymized_text
+    assert same_a.mapping == other.mapping
 
 
 @pytest.mark.integration
