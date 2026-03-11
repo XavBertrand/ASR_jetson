@@ -85,7 +85,7 @@ def test_pandoc_html_keeps_nested_list_structure():
     ), "Expected nested ordered/unordered lists in the HTML output"
 
 
-def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
+def test_deanonymize_report_keeps_unknown_full_name_and_replaces_exact_pseudonym():
     anonymized_md = "Micheline Martin et Laura Blanc valident la décision."
     mapping = {
         "pseudonym_reverse_map": {
@@ -96,52 +96,35 @@ def test_deanonymize_report_keeps_context_first_name_for_unknown_full_name():
 
     restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
 
-    assert "Micheline et Françoise valident la décision." in restored
-    assert "Micheline Martin" not in restored
+    assert "Micheline Martin et Françoise valident la décision." in restored
 
 
-def test_deanonymize_report_restores_unique_first_name_alias_for_person() -> None:
-    anonymized_md = "Hugo confirme le point. Manon valide la stratégie."
+def test_deanonymize_report_replaces_accent_variant_of_full_pseudonym() -> None:
+    anonymized_md = "Échange au sujet d’Élise Gauthier et du projet d’Élise Gauthier."
     mapping = {
-        "entities": [
-            {
-                "tag": "<PERSON_1>",
-                "type": "PERSON",
-                "canonical": "M. Marlon",
-                "pseudonym": "Hugo Durand",
-                "mentions": ["M. Marlon"],
-            },
-            {
-                "tag": "<PERSON_2>",
-                "type": "PERSON",
-                "canonical": "Micheline Martin",
-                "pseudonym": "Manon Gauthier",
-                "mentions": ["Micheline Martin"],
-            },
-            {
-                "tag": "<ORGANIZATION_1>",
-                "type": "ORGANIZATION",
-                "canonical": "Astronov",
-                "pseudonym": "Prisme Conseil",
-                "mentions": ["Astronov"],
-            },
-        ],
-        "pseudonym_map": {
-            "<PERSON_1>": "Hugo Durand",
-            "<PERSON_2>": "Manon Gauthier",
-            "<ORGANIZATION_1>": "Prisme Conseil",
-        },
         "pseudonym_reverse_map": {
-            "Hugo Durand": "M. Marlon",
-            "Manon Gauthier": "Micheline Martin",
-            "Prisme Conseil": "Astronov",
+            "Elise Gauthier": "Mme Calmejane",
         },
     }
 
     restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
 
-    assert "M. Marlon confirme le point." in restored
-    assert "Micheline Martin valide la stratégie." in restored
+    assert "Échange au sujet de Mme Calmejane" in restored
+    assert "du projet de Mme Calmejane" in restored
+
+
+def test_deanonymize_report_preserves_full_restored_names_with_titles() -> None:
+    anonymized_md = "Lea Lemoine contacte Manon Gauthier."
+    mapping = {
+        "pseudonym_reverse_map": {
+            "Lea Lemoine": "Madame Combe D'azo",
+            "Manon Gauthier": "Delphine Heinrich-bertrand",
+        },
+    }
+
+    restored = meeting_report.deanonymize_report_markdown(anonymized_md, mapping)
+
+    assert "Madame Combe D'azo contacte Delphine Heinrich-bertrand." in restored
 
 
 def test_deanonymize_report_does_not_restore_ambiguous_first_name_alias() -> None:

@@ -527,8 +527,8 @@ def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any
     Also restores single first-name mentions when the PERSON mapping is unambiguous.
     """
     restored = deanonymize_text(anonymized_markdown, mapping, restore="canonical")
-    restored = _restore_person_first_name_aliases(restored, mapping)
-    return _strip_unknown_person_names(restored, mapping)
+    restored = re.sub(r"\bd[’'](?=(?:M\.?|Mme\.?|Monsieur|Madame)\b)", "de ", restored)
+    return restored
 
 
 def _derive_base_name(anonymized_path: Path, run_id: Optional[str] = None) -> str:
