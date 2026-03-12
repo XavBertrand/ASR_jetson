@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from asr_jetson.postprocessing import meeting_report, mistral_client
+from asr_jetson.postprocessing import languagetool_helper
 
 
 @pytest.mark.unit
@@ -103,3 +104,15 @@ def test_polish_markdown_with_languagetool(monkeypatch: pytest.MonkeyPatch) -> N
     cleaned = meeting_report._polish_markdown_with_languagetool(text)
 
     assert cleaned == "Bonjour Alice"
+
+
+@pytest.mark.unit
+def test_languagetool_default_version_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LT_VERSION", raising=False)
+    assert languagetool_helper._lt_download_version() == "6.6"
+
+
+@pytest.mark.unit
+def test_languagetool_version_can_be_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LT_VERSION", "6.7")
+    assert languagetool_helper._lt_download_version() == "6.7"

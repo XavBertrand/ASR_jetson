@@ -9,83 +9,14 @@ import time
 import requests
 from typing import Iterator, Optional
 
-
-def _prepare_lt_home() -> str:
-    """
-    Ensure ``LT_HOME`` points to a writable, persistent cache directory.
-
-    The default /app/.cache path works inside our Docker image, but when the CLI
-    runs directly on a developer machine that path is often read-only, causing
-    ``language_tool_python`` to re-download LanguageTool into temporary folders
-    every time. By selecting a user-specific cache location we only download the
-    LanguageTool bundle once.
-    """
-    env_value = os.environ.get("LT_HOME")
-    candidates = []
-
-    if env_value:
-        candidates.append(Path(env_value))
-    else:
-        xdg_cache = os.environ.get("XDG_CACHE_HOME")
-        if xdg_cache:
-            candidates.append(Path(xdg_cache) / "LanguageTool")
-        candidates.append(Path.home() / ".cache" / "LanguageTool")
-        candidates.append(Path.cwd() / ".cache" / "LanguageTool")
-        candidates.append(Path(tempfile.gettempdir()) / "LanguageTool")
-
-    for path in candidates:
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        resolved = str(path)
-        # language_tool_python reads LTP_PATH; keep LT_HOME for compatibility.
-        os.environ.setdefault("LT_HOME", resolved)
-        os.environ.setdefault("LTP_PATH", resolved)
-        return str(path)
-
-    raise RuntimeError("Unable to prepare a writable LT_HOME directory.")
-
-
-# --- LanguageTool: persistent cache + lazy global instance ---
-_LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
-# Désactive LanguageTool par défaut pour éviter les téléchargements automatiques.
-_disable_env = os.getenv("DISABLE_LANGUAGETOOL")
-_LT_DISABLED = False if _disable_env is None else _disable_env.strip().lower() in {"1", "true", "yes", "on"}
-_LT_INIT_DONE = False
-_LT_INIT_ERROR: Optional[str] = None
-LT_TOOL = None
-
+from asr_jetson.postprocessing.languagetool_helper import ensure_language_tool
 
 def _ensure_language_tool():
     """
     Lazily instantiate LanguageTool, keeping the pipeline robust when Java/binaries
     are missing or crashy. Returns ``None`` when disabled or unavailable.
     """
-    global _LT_INIT_DONE, _LT_INIT_ERROR, LT_TOOL
-    if LT_TOOL is not None:
-        return LT_TOOL
-    if _LT_DISABLED or _LT_INIT_DONE:
-        return None
-
-    _LT_INIT_DONE = True
-    try:
-        cache_dir = _prepare_lt_home()
-        # language_tool_python uses LTP_PATH; ensure it is set before import.
-        os.environ.setdefault("LTP_PATH", cache_dir)
-        import language_tool_python  # local import to avoid import-time side effects
-
-        LT_TOOL = (
-            language_tool_python.LanguageTool("fr", remote_server=_LT_ENDPOINT)
-            if _LT_ENDPOINT
-            else language_tool_python.LanguageTool("fr")
-        )
-        return LT_TOOL
-    except Exception as _e:
-        _LT_INIT_ERROR = str(_e)
-        LT_TOOL = None
-        print(f"[WARN] LanguageTool unavailable ({_e})")
-        return None
+    return ensure_language_tool()
 
 os.environ["LLM_ENDPOINT"] = "http://tensorrt-llm:8000"
 os.environ["LLM_MODEL"] = "gemma2:2b"
