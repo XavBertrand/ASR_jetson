@@ -34,9 +34,6 @@ from asr_jetson.postprocessing.meeting_report import (
     generate_pdf_report,
 )
 from asr_jetson.postprocessing import mistral_client
-from asr_jetson.anonymization.core.models import BatchRequest
-from asr_jetson.anonymization.core.policy import load_policy as load_anonymization_policy
-from asr_jetson.anonymization.core.service import DocumentAnonymizer
 from asr_jetson.pipeline.text_backend_adapter import (
     CANONICAL_BACKEND_CALLABLE,
     TextBackendRuntimeFailure,
@@ -349,12 +346,6 @@ class PipelineConfig:
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
     meeting_date: Optional[str] = None
-    document_anonymization_enabled: bool = False
-    document_anonymization_input: Optional[Path] = None
-    document_anonymization_output: Optional[Path] = None
-    document_anonymization_case_id: Optional[str] = None
-    document_anonymization_policy: str = "strict_offline"
-    document_anonymization_config: Path = Path("configs/anonymization_profiles.yaml")
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -853,54 +844,6 @@ def _run_report_only(audio_path: str | os.PathLike[str], cfg: PipelineConfig) ->
     }
 
 
-def _run_optional_document_anonymization(cfg: PipelineConfig) -> Optional[Dict[str, Any]]:
-    """Optional integration hook that keeps default pipeline behavior unchanged."""
-    if not cfg.document_anonymization_enabled:
-        return None
-    if cfg.document_anonymization_input is None:
-        return None
-
-    input_path = Path(cfg.document_anonymization_input)
-    if not input_path.exists():
-        print("[WARN] Document anonymization input path missing; optional hook skipped.")
-        return None
-
-    output_root = Path(cfg.document_anonymization_output or (_resolve_out_root(cfg) / "doc_anonymization"))
-    report_path = output_root / "report.json"
-    case_id = cfg.document_anonymization_case_id or _build_run_id("doc_case")
-    try:
-        policy = load_anonymization_policy(
-            cfg.document_anonymization_policy,
-            cfg.document_anonymization_config,
-        )
-        service = DocumentAnonymizer()
-        if input_path.is_file():
-            doc_inputs = [input_path]
-        else:
-            doc_inputs = [
-                p
-                for p in sorted(input_path.rglob("*"))
-                if p.is_file() and p.suffix.lower() in {".pdf", ".docx", ".xlsx", ".txt"}
-            ]
-        if not doc_inputs:
-            return {"doc_anonymization_status": "skipped_no_inputs"}
-
-        result = service.anonymize_batch(
-            BatchRequest(
-                case_id=case_id,
-                policy_name=cfg.document_anonymization_policy,
-                policy=policy,
-                input_paths=doc_inputs,
-                output_root=output_root,
-                report_path=report_path,
-            )
-        )
-        return {"doc_anonymization_report": result.report_path, "doc_anonymization_status": result.status}
-    except Exception as exc:  # pragma: no cover - optional hook path
-        print(f"[WARN] Optional document anonymization hook failed: {exc}")
-        return {"doc_anonymization_status": "failed"}
-
-
 def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
     """
     Execute the full ASR pipeline: optional denoising, diarization, ASR decoding,
@@ -1106,8 +1049,6 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     except Exception as exc:
         print(f"[WARN] Manifest write failed: {exc}")
 
-    optional_doc_outputs = _run_optional_document_anonymization(cfg) or {}
-
     return {
         "diarization": diar_segments,
         "asr": asr_segments,
@@ -1115,5 +1056,4 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "json": str(out_json),
         "srt": str(out_srt),
         **post_outputs,
-        **optional_doc_outputs,
     }
