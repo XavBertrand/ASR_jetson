@@ -33,11 +33,15 @@ from asr_jetson.postprocessing.meeting_report import (
     format_meeting_date_literal,
     generate_pdf_report,
 )
-from asr_jetson.postprocessing.transformer_anonymizer import TransformerAnonymizer
 from asr_jetson.postprocessing import mistral_client
-from asr_jetson.anonymization.core.models import BatchRequest
-from asr_jetson.anonymization.core.policy import load_policy as load_anonymization_policy
-from asr_jetson.anonymization.core.service import DocumentAnonymizer
+from asr_jetson.pipeline.text_backend_adapter import (
+    CANONICAL_BACKEND_CALLABLE,
+    TextBackendRuntimeFailure,
+    anonymize_text_via_backend,
+    assert_canonical_callable_path,
+    normalize_entity_label,
+)
+from asr_jetson.pipeline.text_backend_contract import TextAnonymizationRequest, TextAnonymizationResult
 
 
 # --- Helpers ---
@@ -342,12 +346,6 @@ class PipelineConfig:
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
     meeting_date: Optional[str] = None
-    document_anonymization_enabled: bool = False
-    document_anonymization_input: Optional[Path] = None
-    document_anonymization_output: Optional[Path] = None
-    document_anonymization_case_id: Optional[str] = None
-    document_anonymization_policy: str = "strict_offline"
-    document_anonymization_config: Path = Path("configs/anonymization_profiles.yaml")
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -492,7 +490,35 @@ _CONTEXT_NAME_STOPWORDS = {
     "m.",
     "mme",
     "mlle",
+    "rendez",
+    "vous",
+    "entre",
 }
+_CONTEXT_NAME_TITLE_PREFIXES = {
+    "m",
+    "m.",
+    "mme",
+    "mme.",
+    "mlle",
+    "mlle.",
+    "monsieur",
+    "madame",
+    "mademoiselle",
+    "maitre",
+    "maître",
+    "me",
+}
+_CONTEXT_NAME_TITLE_CONTEXT_RE = re.compile(
+    r"(?:\bM\.?\s+|\bMme\.?\s+|\bMlle\.?\s+|\bMonsieur\s+|\bMadame\s+|\bMaitre\s+|\bMaître\s+|\bMe\s+)$"
+)
+_REPORT_PLACEHOLDER_RE = re.compile(r"<[A-Z]+_[A-Z0-9]{3,}>")
+_REPORT_PLACEHOLDER_GUARDRAIL = (
+    "IMPORTANT ANONYMISATION:\n"
+    "- Les tokens de la forme `<TYPE_...>` sont les pseudonymes de référence.\n"
+    "- Recopie chaque token strictement à l'identique (même orthographe, mêmes chevrons).\n"
+    "- N'invente aucun prénom/nom/organisation alternatif.\n"
+    "- N'efface, ne fusionne et ne renomme aucun token."
+)
 
 
 def _extract_context_names(text: str) -> List[str]:
@@ -502,20 +528,55 @@ def _extract_context_names(text: str) -> List[str]:
         candidate = match.group(0).strip(" ,;:")
         if not candidate:
             continue
-        tokens = [token for token in candidate.split() if token]
+        raw_tokens = [token for token in candidate.split() if token]
+        tokens = list(raw_tokens)
         if not tokens:
             continue
+        had_title_prefix = bool(
+            raw_tokens
+            and raw_tokens[0].lower().strip(".,;:") in _CONTEXT_NAME_TITLE_PREFIXES
+        )
+        if not had_title_prefix:
+            context_prefix = (text or "")[max(0, match.start() - 16) : match.start()]
+            had_title_prefix = bool(_CONTEXT_NAME_TITLE_CONTEXT_RE.search(context_prefix))
         while tokens and tokens[0].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
             tokens.pop(0)
         while tokens and tokens[-1].lower().strip(".,;:") in _CONTEXT_NAME_STOPWORDS:
             tokens.pop()
         if not tokens:
             continue
+        if len(tokens) == 1 and not had_title_prefix:
+            continue
         cleaned = " ".join(tokens)
         if cleaned not in seen:
             names.append(cleaned)
             seen.add(cleaned)
     return names
+
+
+def _compose_report_user_text(user_prefix: str, anonymized_payload: str) -> str:
+    if _REPORT_PLACEHOLDER_RE.search(anonymized_payload):
+        return f"{user_prefix}\n{_REPORT_PLACEHOLDER_GUARDRAIL}\n\n{anonymized_payload}"
+    return user_prefix + anonymized_payload
+
+
+def _anonymize_text_via_backend(
+    *,
+    text: str,
+    domain_entities: Dict[str, List[str]] | None,
+    cfg: "PipelineConfig",
+    case_id: str,
+) -> TextAnonymizationResult:
+    assert_canonical_callable_path(CANONICAL_BACKEND_CALLABLE)
+    request = TextAnonymizationRequest(
+        text=text,
+        domain_entities=domain_entities,
+        preserve_dates=cfg.anon_preserve_dates,
+        model_name=cfg.anon_model,
+        device=_resolve_transformers_device(cfg.anon_device),
+        case_id=case_id,
+    )
+    return anonymize_text_via_backend(request)
 
 
 def _run_postprocessing(
@@ -573,20 +634,36 @@ def _run_postprocessing(
                 label = entry.get("label") or cfg.anon_catalog_label
                 if cfg.anon_catalog_as_person:
                     label = "PERSON"
-                normalized = TransformerAnonymizer._normalize_type(label)
+                normalized = normalize_entity_label(label)
                 tmp.setdefault(normalized, set()).add(pattern.strip())
             domain_entities = {label: sorted(values) for label, values in tmp.items() if values}
 
-        anonymizer = TransformerAnonymizer(
-            model_name=cfg.anon_model,
-            domain_entities=domain_entities or None,
-            preserve_dates=cfg.anon_preserve_dates,
-            device=_resolve_transformers_device(cfg.anon_device),
-        )
-        anonymized_text, mapping = anonymizer.anonymize_with_tags(base_text)
+        try:
+            backend_result = _anonymize_text_via_backend(
+                text=base_text,
+                domain_entities=domain_entities or None,
+                cfg=cfg,
+                case_id=run_id,
+            )
+        except TextBackendRuntimeFailure as exc:
+            raise RuntimeError(
+                f"Text anonymization failed during backend execution. {exc}"
+            ) from exc
+        anonymized_text, mapping = backend_result.anonymized_text, backend_result.mapping
 
         if speaker_context_hint:
-            context_anonymized, context_mapping = anonymizer.anonymize_with_tags(speaker_context_hint)
+            try:
+                context_result = _anonymize_text_via_backend(
+                    text=speaker_context_hint,
+                    domain_entities=domain_entities or None,
+                    cfg=cfg,
+                    case_id=run_id,
+                )
+            except TextBackendRuntimeFailure as exc:
+                raise RuntimeError(
+                    f"Text anonymization failed during speaker-context backend execution. {exc}"
+                ) from exc
+            context_anonymized, context_mapping = context_result.anonymized_text, context_result.mapping
             mapping = _merge_anonymization_mappings(mapping, context_mapping)
             speaker_context_anon = context_anonymized
             context_names = _extract_context_names(speaker_context_hint)
@@ -595,6 +672,28 @@ def _run_postprocessing(
                 mapping["context_names"] = list(existing_context) + [
                     name for name in context_names if name not in existing_context
                 ]
+
+            if context_result.warnings:
+                mapping.setdefault("warnings", [])
+                mapping["warnings"].extend(
+                    {
+                        "warning_code": item.warning_code,
+                        "warning_level": item.warning_level,
+                        "warning_message": item.warning_message,
+                    }
+                    for item in context_result.warnings
+                )
+
+        if backend_result.warnings:
+            mapping.setdefault("warnings", [])
+            mapping["warnings"].extend(
+                {
+                    "warning_code": item.warning_code,
+                    "warning_level": item.warning_level,
+                    "warning_message": item.warning_message,
+                }
+                for item in backend_result.warnings
+            )
 
         corrected_text = mapping.get("corrected_text")
         if isinstance(corrected_text, str) and corrected_text and corrected_text != base_text:
@@ -618,15 +717,16 @@ def _run_postprocessing(
             json.dumps(mapping, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-
-    else:
-        # anonymize=False -> on copie juste le texte brut dans les sorties "clean"
+    elif not cfg.anonymize:
+        # anonymize=False -> no backend call
         out_txt_anon.write_text(base_text, encoding="utf-8")
         out_txt_anon_clean.write_text(base_text, encoding="utf-8")
         out_mapping_json.write_text("{}", encoding="utf-8")
         out_txt_clean.write_text(base_text, encoding="utf-8")
         if speaker_context_hint:
             speaker_context_anon = speaker_context_hint
+    else:
+        raise RuntimeError("Unexpected anonymization branch state.")
 
     if cfg.generate_meeting_report:
         prompts_path = cfg.meeting_report_prompts
@@ -646,10 +746,11 @@ def _run_postprocessing(
             )
         meeting_date_label = format_meeting_date_literal(meeting_date)
         user_prefix = prompt.user_prefix.format(meeting_date=meeting_date_label)
+        user_text = _compose_report_user_text(user_prefix, anonymized_payload)
         analysis_anonymized = mistral_client.chat_complete(
             model=prompt.model,
             system=prompt.system,
-            user_text=user_prefix + anonymized_payload,
+            user_text=user_text,
             temperature=0.1,
         )
 
@@ -741,54 +842,6 @@ def _run_report_only(audio_path: str | os.PathLike[str], cfg: PipelineConfig) ->
         "srt": str(out_srt) if out_srt.exists() else None,
         **outputs,
     }
-
-
-def _run_optional_document_anonymization(cfg: PipelineConfig) -> Optional[Dict[str, Any]]:
-    """Optional integration hook that keeps default pipeline behavior unchanged."""
-    if not cfg.document_anonymization_enabled:
-        return None
-    if cfg.document_anonymization_input is None:
-        return None
-
-    input_path = Path(cfg.document_anonymization_input)
-    if not input_path.exists():
-        print("[WARN] Document anonymization input path missing; optional hook skipped.")
-        return None
-
-    output_root = Path(cfg.document_anonymization_output or (_resolve_out_root(cfg) / "doc_anonymization"))
-    report_path = output_root / "report.json"
-    case_id = cfg.document_anonymization_case_id or _build_run_id("doc_case")
-    try:
-        policy = load_anonymization_policy(
-            cfg.document_anonymization_policy,
-            cfg.document_anonymization_config,
-        )
-        service = DocumentAnonymizer()
-        if input_path.is_file():
-            doc_inputs = [input_path]
-        else:
-            doc_inputs = [
-                p
-                for p in sorted(input_path.rglob("*"))
-                if p.is_file() and p.suffix.lower() in {".pdf", ".docx", ".xlsx", ".txt"}
-            ]
-        if not doc_inputs:
-            return {"doc_anonymization_status": "skipped_no_inputs"}
-
-        result = service.anonymize_batch(
-            BatchRequest(
-                case_id=case_id,
-                policy_name=cfg.document_anonymization_policy,
-                policy=policy,
-                input_paths=doc_inputs,
-                output_root=output_root,
-                report_path=report_path,
-            )
-        )
-        return {"doc_anonymization_report": result.report_path, "doc_anonymization_status": result.status}
-    except Exception as exc:  # pragma: no cover - optional hook path
-        print(f"[WARN] Optional document anonymization hook failed: {exc}")
-        return {"doc_anonymization_status": "failed"}
 
 
 def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dict[str, Any]:
@@ -996,8 +1049,6 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     except Exception as exc:
         print(f"[WARN] Manifest write failed: {exc}")
 
-    optional_doc_outputs = _run_optional_document_anonymization(cfg) or {}
-
     return {
         "diarization": diar_segments,
         "asr": asr_segments,
@@ -1005,5 +1056,4 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
         "json": str(out_json),
         "srt": str(out_srt),
         **post_outputs,
-        **optional_doc_outputs,
     }

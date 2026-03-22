@@ -89,6 +89,20 @@ jobs:
             --junitxml=reports/junit.xml \
             --durations=20
 
+      - name: Run transformer text backend gates (if present)
+        run: |
+          . .venv/bin/activate
+          for gate in \
+            tests/acceptance/run_transformer_text_backend_gate.sh \
+            tests/acceptance/run_non_goal_format_regression_gate.sh; do
+            if [ -f "$gate" ]; then
+              echo "Running $gate"
+              bash "$gate"
+            else
+              echo "Skipping missing gate: $gate"
+            fi
+          done
+
       # 📦 Artefacts utiles en cas d'échec (logs, rapports pytest, etc.)
       - name: Upload pytest report
         if: always()

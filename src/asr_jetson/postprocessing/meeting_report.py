@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from asr_jetson.postprocessing.anonymizer import deanonymize_text
+from asr_jetson.postprocessing.languagetool_helper import ensure_language_tool
 
 try:  # pragma: no cover - optional dependency
     import pypandoc  # type: ignore
@@ -30,18 +30,6 @@ except Exception as _err:  # pragma: no cover - executed when weasyprint missing
     HTML = None  # type: ignore
     _HAS_WEASYPRINT = False
     _WEASYPRINT_IMPORT_ERROR = _err
-
-try:  # pragma: no cover - optional dependency
-    import language_tool_python  # type: ignore
-    from language_tool_python import utils as lt_utils  # type: ignore
-
-    _HAS_LANGUAGETOOL = True
-    _LANGUAGETOOL_IMPORT_ERROR: Optional[Exception] = None
-except Exception as _err:  # pragma: no cover - executed when language_tool_python missing
-    language_tool_python = None  # type: ignore
-    lt_utils = None  # type: ignore
-    _HAS_LANGUAGETOOL = False
-    _LANGUAGETOOL_IMPORT_ERROR = _err
 
 _PANDOC_MD_FORMAT = (
     "markdown+pipe_tables+grid_tables+multiline_tables+table_captions+raw_html+fenced_divs"
@@ -72,71 +60,11 @@ PROMPT_TITLE_MAP: dict[str, str] = {
     "entretien_client_professionnel_contentieux": "Compte Rendu d'Entretien Client",
     "compte_rendu_association": "Compte Rendu Association",
 }
-_LT_ENDPOINT = os.getenv("LT_ENDPOINT", "").strip() or None
-_LT_DISABLED = (os.getenv("DISABLE_LANGUAGETOOL") or "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-_LT_INIT_DONE = False
-_LT_INIT_ERROR: Optional[str] = None
-_LT_TOOL: Optional[Any] = None
-
-
-def _prepare_lt_home() -> Optional[str]:
-    """
-    Ensure a writable LanguageTool cache directory exists and is exported.
-    """
-    env_value = os.environ.get("LT_HOME")
-    candidates = []
-    if env_value:
-        candidates.append(Path(env_value))
-    else:
-        xdg_cache = os.environ.get("XDG_CACHE_HOME")
-        if xdg_cache:
-            candidates.append(Path(xdg_cache) / "LanguageTool")
-        candidates.append(Path.home() / ".cache" / "LanguageTool")
-        candidates.append(Path.cwd() / ".cache" / "LanguageTool")
-        candidates.append(Path(tempfile.gettempdir()) / "LanguageTool")
-
-    for path in candidates:
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            continue
-        resolved = str(path)
-        os.environ.setdefault("LT_HOME", resolved)
-        os.environ.setdefault("LTP_PATH", resolved)
-        return resolved
-    return None
-
-
 def _ensure_language_tool() -> Optional[Any]:
     """
     Lazily instantiate LanguageTool (French) with optional remote endpoint support.
     """
-    global _LT_INIT_DONE, _LT_INIT_ERROR, _LT_TOOL
-    if _LT_TOOL is not None:
-        return _LT_TOOL
-    if _LT_DISABLED or _LT_INIT_DONE or not _HAS_LANGUAGETOOL:
-        _LT_INIT_DONE = True
-        return None
-
-    _LT_INIT_DONE = True
-    try:
-        cache_dir = _prepare_lt_home()
-        if cache_dir:
-            os.environ.setdefault("LTP_PATH", cache_dir)
-
-        tool_cls = language_tool_python.LanguageTool  # type: ignore[attr-defined]
-        _LT_TOOL = tool_cls("fr", remote_server=_LT_ENDPOINT) if _LT_ENDPOINT else tool_cls("fr")
-        return _LT_TOOL
-    except Exception as err:
-        _LT_INIT_ERROR = str(err)
-        _LT_TOOL = None
-        print(f"⚠️ LanguageTool unavailable: {err}")
-        return None
+    return ensure_language_tool()
 
 
 def _polish_markdown_with_languagetool(markdown_text: str) -> str:
@@ -527,8 +455,8 @@ def deanonymize_report_markdown(anonymized_markdown: str, mapping: Dict[str, Any
     Also restores single first-name mentions when the PERSON mapping is unambiguous.
     """
     restored = deanonymize_text(anonymized_markdown, mapping, restore="canonical")
-    restored = _restore_person_first_name_aliases(restored, mapping)
-    return _strip_unknown_person_names(restored, mapping)
+    restored = re.sub(r"\bd[’'](?=(?:M\.?|Mme\.?|Monsieur|Madame)\b)", "de ", restored)
+    return restored
 
 
 def _derive_base_name(anonymized_path: Path, run_id: Optional[str] = None) -> str:

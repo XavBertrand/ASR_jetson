@@ -73,19 +73,6 @@ class LoggingConfig(BaseModel):
     retention: str = "10 days"
 
 
-class AnonymizationConfig(BaseModel):
-    """Runtime settings for document anonymization feature integration."""
-
-    enabled: bool = False
-    default_policy: str = "strict_offline"
-    policy_config_path: Path = Field(default=Path("configs/anonymization_profiles.yaml"))
-    allow_network_opt_in: bool = False
-    internal_api_key_env: str = "ANON_INTERNAL_API_KEY"
-    mapping_key_provider_env: str = "ANON_KEY_PROVIDER"
-    mapping_key_id_env: str = "ANON_KEY_ID"
-    mapping_key_value_env: str = "ANON_MAPPING_KEY"
-
-
 class PipelineConfig(BaseModel):
     """Aggregate configuration for the full ASR pipeline."""
     name: str = "asr_pipeline"
@@ -98,7 +85,6 @@ class PipelineConfig(BaseModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    anonymization: AnonymizationConfig = Field(default_factory=AnonymizationConfig)
 
     @classmethod
     def from_yaml(cls, path: Path) -> "PipelineConfig":

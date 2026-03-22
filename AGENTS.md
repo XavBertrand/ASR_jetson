@@ -40,6 +40,8 @@
 - filesystem artifacts under feature-specific output root; encrypted mapping files plus minimal audit events (002-doc-anonymization)
 - Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; additions `pymupdf`, `openpyxl`, `cryptography`, `lxml` (002-doc-anonymization)
 - local filesystem artifacts under feature output root (`anonymized/`, `reports/`, optional encrypted `mappings/`, minimal `audit/`) with restricted permissions (002-doc-anonymization)
+- Python 3.11 + Existing `transformers`, `gliner`, `rapidfuzz`, `unidecode` via `src/asr_jetson/postprocessing/transformer_anonymizer.py` (no new dependency introduced) (001-transformer-text-backend)
+- Existing pipeline filesystem outputs under run directory (`txt/`, `json/`, `reports/`, `pdf/`) (001-transformer-text-backend)
 
 ## Recent Changes
 - 002-doc-anonymization: Added Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; planned additions `pymupdf` (PDF redaction), `openpyxl` (XLSX), `cryptography` (AEAD), `lxml` (DOCX XML metadata edits)

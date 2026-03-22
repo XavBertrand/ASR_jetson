@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import sys
 
-from asr_jetson.anonymization.cli.anonymize_cli import main as anonymize_main
 from asr_jetson.pipeline.cli import main as pipeline_main
 
 
-_HELP = """usage: asr {pipeline|anonymize} ...
+_HELP = """usage: asr {pipeline} ...
 
 ASR Jetson command suite
 
 Commands:
   pipeline    Run audio ASR pipeline (legacy default behavior)
-  anonymize   Batch anonymize documents
 """
 
 
@@ -25,8 +23,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     command = args[0]
-    if command == "anonymize":
-        return anonymize_main(args[1:])
     if command in {"pipeline", "asr-pipeline"}:
         pipeline_main(args[1:])
         return 0

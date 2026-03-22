@@ -690,16 +690,16 @@ def _strip_org_suffix(name: str) -> str | None:
 def _should_fuzzy_match(key: str) -> bool:
     if not key or "<" in key or ">" in key:
         return False
-    if re.search(r"\\d", key):
+    if re.search(r"\d", key):
         return False
-    return re.fullmatch(r"[A-Za-zÀ-ÿ'’\\-\\s]+", key) is not None
+    return re.fullmatch(r"[A-Za-zÀ-ÿ'’\-\s]+", key) is not None
 
 
 def _build_accent_pattern(text: str) -> str:
     parts: List[str] = []
     for ch in text:
         if ch.isspace():
-            parts.append(r"\\s+")
+            parts.append(r"\s+")
             continue
         if ch in {"'", "’"}:
             parts.append(r"['’]")
@@ -748,7 +748,7 @@ def _apply_fuzzy_replacements(text: str, lookup: Dict[str, str]) -> str:
             continue
         pattern = _build_accent_pattern(key)
         if pattern:
-            pattern = rf"(?<!\\w){pattern}(?!\\w)"
+            pattern = rf"(?<!\w){pattern}(?!\w)"
             result = re.sub(pattern, value, result)
     return result
 
