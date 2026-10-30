@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/asr_jetson/` holds the core pipeline: `asr/`, `diarization/`, `preprocessing/`, `postprocessing/`, `pipeline/`, and shared `utils/`.
+- `src/asr_jetson/` holds the core pipeline: `asr/`, `diarization/`, `preprocessing/`, `postprocessing/`, `pipeline/`, and `config/`.
 - `configs/` contains runtime YAML presets (e.g., `configs/dev.yaml`, `configs/jetson.yaml`).
 - `tests/` contains pytest suites and fixtures; sample inputs live in `tests/data/`.
 - `scripts/` holds helper utilities (benchmarking, TensorRT helpers, etc.).
@@ -35,6 +35,12 @@
 - `HUGGINGFACE_TOKEN` is required for private Pyannote pipelines.
 - `MISTRAL_API_KEY` is required if meeting reports are enabled.
 
+## Spec-Kit Context
+- `.specify/memory/constitution.md` is the governing project constitution for new specs, plans, and tasks.
+- `.specify/templates/` is tailored for this Python CLI/package layout; keep generated specs mapped to the real modules under `src/asr_jetson/`.
+- Feature plans should name affected output artifacts (`json/`, `srt/`, `txt/`, `reports/`, `pdf/`, `anonymized/`, `mappings/`, `audit/`) and the exact `uv`/pytest commands used for verification.
+- Before broad architecture changes, run the brownfield validation workflow to check that spec-kit assumptions still match the codebase.
+
 ## Active Technologies
 - Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; planned additions `pymupdf` (PDF redaction), `openpyxl` (XLSX), `cryptography` (AEAD), `lxml` (DOCX XML metadata edits) (002-doc-anonymization)
 - filesystem artifacts under feature-specific output root; encrypted mapping files plus minimal audit events (002-doc-anonymization)
@@ -45,3 +51,8 @@
 
 ## Recent Changes
 - 002-doc-anonymization: Added Python 3.11 + existing `transformers`, `gliner`, `python-docx`, `pydantic`; planned additions `pymupdf` (PDF redaction), `openpyxl` (XLSX), `cryptography` (AEAD), `lxml` (DOCX XML metadata edits)
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

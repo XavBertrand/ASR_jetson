@@ -96,7 +96,7 @@ COPY ./src ./src
 RUN printf "av<14\n" > /tmp/uv-constraints.txt
 ENV PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    uv pip install --no-cache --constraints /tmp/uv-constraints.txt -e ".[tensorrt]" language-tool-python && \
+    uv pip install --no-cache --only-binary=sherpa-onnx --constraints /tmp/uv-constraints.txt -e ".[tensorrt,parakeet-cuda]" language-tool-python && \
     rm -rf /tmp/* /var/tmp/*
 
 # Torch/CUDA (JetPack) already provided by base image; Pyannote 3.x installed via project deps.
@@ -121,6 +121,9 @@ RUN find /opt/venv -type f -executable -name "*-config" -delete && \
 
 # Vérification rapide
 RUN python3 -c "import torch, transformers" > /dev/null 2>&1
+RUN python -c "import sherpa_onnx; from asr_jetson.asr.parakeet_engine import load_parakeet" \
+    && asr-pipeline --help
+RUN python -c "import sherpa_onnx; assert '+cuda' in sherpa_onnx.__version__, sherpa_onnx.__version__"
 
 # -----------------------------------------------------------------------------
 # STAGE: runtime (image finale ultra-légère)

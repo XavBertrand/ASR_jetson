@@ -85,7 +85,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--speakers", type=int, default=None, help="Optional expected number of speakers")
     p.add_argument("--whisper-model", default="large-v3", help="Whisper size (small, large-v3 or h2oai/faster-whisper-large-v3-turbo or openai/whisper-large-v3-turbo)")
     p.add_argument("--whisper-compute", default="int8_float16", help="CTranslate2 compute_type")
-    p.add_argument("--lang", default="fr", help="Force language code (e.g. fr, en)")
+    p.add_argument("--asr-backend", choices=("whisper", "parakeet"), default="whisper",
+                   help="ASR engine (default: whisper; both engines follow --device)")
+    p.add_argument("--parakeet-model-dir", type=Path, default=None,
+                   help="Local Parakeet v3 export: floating-point for CUDA, INT8 for CPU (default: HF cache)")
+    p.add_argument("--parakeet-chunk-seconds", type=float, default=20.0,
+                   help="Maximum Parakeet speech window duration (default: 20 seconds)")
+    p.add_argument("--lang", default="fr", help="Force Whisper language (e.g. fr, en); Parakeet detects automatically")
     p.add_argument("--denoise", action="store_true", help="Apply RNNoise/denoise stage")
     p.add_argument("--out-dir", default="outputs", help="Output directory (json/srt/txt)")
     p.add_argument("--pyannote-pipeline", default="pyannote/speaker-diarization-3.1", help="Pyannote pipeline identifier to use for diarization")
@@ -186,6 +192,9 @@ def main(argv: list[str] | None = None) -> None:
         run_id=args.run_id,
         recordings_root=Path(recordings_root) if recordings_root else None,
         report_only=args.report_only,
+        asr_backend=args.asr_backend,
+        parakeet_model_dir=args.parakeet_model_dir,
+        parakeet_chunk_seconds=args.parakeet_chunk_seconds,
     )
     try:
         result = run_pipeline(args.audio, cfg)

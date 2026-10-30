@@ -214,6 +214,8 @@ def _write_manifest(
             "pyannote_pipeline": cfg.pyannote_pipeline,
             "whisper_model": cfg.whisper_model,
             "whisper_compute": cfg.whisper_compute,
+            "asr_backend": cfg.asr_backend,
+            "asr_model": cfg.whisper_model if cfg.asr_backend == "whisper" else "nvidia/parakeet-tdt-0.6b-v3",
             "language": cfg.language,
             "denoise": cfg.denoise,
             "report_only": cfg.report_only,
@@ -346,6 +348,17 @@ class PipelineConfig:
     speaker_context: Optional[str] = None
     asr_prompt: Optional[str] = None
     meeting_date: Optional[str] = None
+    asr_backend: str = "whisper"
+    parakeet_model_dir: Optional[Path] = None
+    parakeet_chunk_seconds: float = 20.0
+
+    def __post_init__(self) -> None:
+        import math
+
+        if self.asr_backend not in {"whisper", "parakeet"}:
+            raise ValueError("asr_backend must be whisper or parakeet")
+        if not math.isfinite(self.parakeet_chunk_seconds) or self.parakeet_chunk_seconds <= 0:
+            raise ValueError("parakeet_chunk_seconds must be finite and positive")
 
 
 def _merge_anonymization_mappings(base: Dict[str, Any], extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -859,6 +872,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     if cfg.report_only:
         return _run_report_only(audio_path, cfg)
 
+    if cfg.asr_backend == "parakeet" and cfg.device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("Parakeet requested CUDA but no CUDA GPU is available; use --device cpu explicitly")
     device = "cuda" if cfg.device.startswith("cuda") and torch.cuda.is_available() else "cpu"
     monitor = _GpuMemoryMonitor(cfg.monitor_gpu_memory and device == "cuda")
     monitor.log("pipeline-start")
@@ -922,28 +937,40 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
             print(f"[WARN] Manifest write failed: {exc}")
         return {"diarization": [], "asr": [], "labeled": []}
 
-    # 2) ASR with Faster-Whisper.
+    # 2) ASR with the selected backend.
     print("=" * 40 + "\n" + "   ASR\n" + "=" * 40)
-    model, _meta = load_faster_whisper(
-        model_name=cfg.whisper_model,
-        device=device,
-        compute_type=compute_type,   # trusted compute type
-    )
-    monitor.log("after-whisper-load")
-    asr_segments = transcribe_segments(
-        model,
-        wav_path,
-        diar_segments,
-        language=cfg.language,
-        initial_prompt=cfg.asr_prompt,
-    )
+    if cfg.asr_backend == "whisper":
+        model, _meta = load_faster_whisper(
+            model_name=cfg.whisper_model,
+            device=device,
+            compute_type=compute_type,
+        )
+        monitor.log("after-whisper-load")
+        try:
+            asr_segments = transcribe_segments(
+                model, wav_path, diar_segments,
+                language=cfg.language, initial_prompt=cfg.asr_prompt,
+            )
+        finally:
+            del model
+    else:
+        from asr_jetson.asr.parakeet_engine import load_parakeet, transcribe_parakeet
+
+        print(f"[INFO] Parakeet v3 ONNX: {device} inference, automatic language detection; "
+              "--lang and --asr-prompt apply only to Whisper.")
+        model = load_parakeet(cfg.parakeet_model_dir, device=device)
+        try:
+            asr_segments = transcribe_parakeet(
+                model, wav_path, diar_segments, cfg.parakeet_chunk_seconds,
+            )
+        finally:
+            del model
     monitor.log("after-transcription")
 
-    # Delete the Whisper model from memory.
-    del model
+    # Release GPU buffers before postprocessing.
     torch.cuda.empty_cache()
     gc.collect()
-    monitor.log("after-whisper-release")
+    monitor.log("after-whisper-release" if cfg.asr_backend == "whisper" else "after-parakeet-release")
 
     # 3) Merge ASR segments and speaker assignments.
     labeled = attach_speakers(diar_segments, asr_segments)
@@ -963,7 +990,8 @@ def run_pipeline(audio_path: str | os.PathLike[str], cfg: PipelineConfig) -> Dic
     os.makedirs(run_root / "txt", exist_ok=True)
 
     diar_tag = cfg.pyannote_pipeline.split("/")[-1] if "/" in cfg.pyannote_pipeline else cfg.pyannote_pipeline
-    tag = f"_pyannote_{diar_tag}_{cfg.whisper_model}".replace("/", "_")
+    model_tag = cfg.whisper_model if cfg.asr_backend == "whisper" else "parakeet-tdt-0.6b-v3"
+    tag = f"_pyannote_{diar_tag}_{model_tag}".replace("/", "_")
     out_json = run_root / "json" / (Path(audio_path).stem + f"{tag}.json")
     out_srt = run_root / "srt" / (Path(audio_path).stem + f"{tag}.srt")
     out_txt = run_root / "txt" / (Path(audio_path).stem + f"{tag}.txt")
