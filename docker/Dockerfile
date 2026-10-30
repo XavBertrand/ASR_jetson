@@ -82,7 +82,7 @@ ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu126
 # Installer les dépendances Python (une seule couche) et purger les artefacts volumineux
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     set -eux; \
-    uv sync --frozen --extra gpu-linux --python /opt/venv/bin/python --no-build-package av; \
+    uv sync --frozen --extra gpu-linux --extra parakeet-cuda --python /opt/venv/bin/python --no-build-package av --no-build-package sherpa-onnx; \
     uv pip install --no-cache-dir -e . --no-deps --python /opt/venv/bin/python; \
     if [ "${ENABLE_TENSORRT}" = "1" ]; then \
         uv pip install --no-cache-dir --extra-index-url https://pypi.nvidia.com tensorrt; \
@@ -98,6 +98,9 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
 # Safety: ensure we use python-docx and not a conflicting "docx" distribution
 RUN python -m pip uninstall -y docx docx-python || true
 RUN python -c "import docx; import docx.api; print('python-docx OK:', docx.__file__)"
+RUN python -c "import sherpa_onnx; from asr_jetson.asr.parakeet_engine import load_parakeet" \
+    && asr-pipeline --help
+RUN python -c "import sherpa_onnx; assert '+cuda' in sherpa_onnx.__version__, sherpa_onnx.__version__"
 
 # Copier uniquement le code utile au runtime
 COPY scripts ./scripts
@@ -134,8 +137,9 @@ except Exception as e:
 PYCODE
 EOF
 
-# Vérification initiale
-RUN /usr/local/bin/check-gpu
+# Build hosts do not need a GPU or network access to model repositories.
+# Keep check-gpu available as an explicit runtime diagnostic.
+RUN python -c "import torch, faster_whisper, sherpa_onnx"
 
 # Créer le dossier outputs
 RUN mkdir -p outputs
